@@ -59,6 +59,26 @@
   font-size: 16px;
   min-height: 48px;
 }
+.sr-amount-sign {
+  display: flex;
+  gap: 10px;
+  margin: 12px 0;
+}
+.sr-amount-sign .button {
+  flex: 1;
+}
+.sr-amount-input {
+  position: relative;
+}
+.sr-amount-input > span {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.sr-amount-input .sr-input {
+  padding-left: 48px;
+}
 .sr-textarea {
   min-height: 140px;
   line-height: 1.6;
@@ -372,4 +392,3 @@
   flex-shrink: 0;
   color: #d97706;
 }
-

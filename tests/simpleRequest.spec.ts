@@ -57,6 +57,7 @@ interface MockApi {
   actions: string[];
   /** The request payloads the app saved, so the test can assert the intake. */
   saved: Record<string, any>[];
+  emailed: Record<string, any>[];
   /** One row per upload attempt, including the ones that failed. */
   uploads: UploadCall[];
   transitions: { status: string; id: string; expectedRevision: number }[];
@@ -77,6 +78,7 @@ async function installMockApi(
   const api: MockApi = {
     actions: [],
     saved: [],
+    emailed: [],
     uploads: [],
     transitions: [],
     failNextUpload: false,
@@ -202,6 +204,9 @@ async function installMockApi(
           request: commit({ ...current, status: body.status }),
         });
       }
+      case "sendEmail":
+        api.emailed.push(body.request);
+        return respond({ ok: true });
       default:
         return respond({ ok: true });
     }
@@ -217,6 +222,82 @@ async function pickCustomer(page: Page, customer: string) {
     .first()
     .click();
 }
+
+for (const [sign, button] of [
+  ["+", "Plus — increase"],
+  ["-", "Minus — deduction"],
+]) {
+  test(`the quick request emails its optional ${sign} dollar amount`, async ({
+    page,
+  }) => {
+    const api = await installMockApi(page);
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.goto("/");
+    await page.getByRole("button", { name: "Quick request", exact: true }).click();
+    await pickCustomer(page, "York Ridge Apartments");
+    await page
+      .getByLabel("What changed?", { exact: true })
+      .fill("Flooring change");
+    const amount = page.getByLabel("Known change amount", { exact: true });
+    await amount.fill("1250.19");
+    const direction = page.getByRole("button", { name: button });
+    await direction.focus();
+    await page.keyboard.press("Space");
+    await expect(direction).toHaveAttribute("aria-pressed", "true");
+    await expect(amount).toHaveValue("1250.19");
+    for (const width of [320, 768, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+    }
+    await page.setViewportSize({ width: 320, height: 1000 });
+    await page.locator(".sr-amount-section").scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: `tmp/quick-request-amount-${sign === "+" ? "plus" : "minus"}.png`,
+    });
+    await page.getByLabel("Recipient email address").fill("review@example.com");
+    if (sign === "+")
+      await page.locator(".email-input-group").getByRole("button", { name: "Send email & submit to estimating", exact: true }).click();
+    else await page.locator(".sr-submit-button").click();
+    await expect(page.getByText(/Sent to estimating/)).toBeVisible();
+    expect(api.saved[0].knownChangeAmount).toBe(`${sign}1250.19`);
+    expect(api.saved[0].finalChangeOrder).toBeUndefined();
+    expect(api.emailed[0].knownChangeAmount).toBe(`${sign}1250.19`);
+    expect(errors).toEqual([]);
+  });
+}
+
+test("invalid known amounts block saving, and clearing the amount leaves it optional", async ({
+  page,
+}) => {
+  const api = await installMockApi(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Quick request", exact: true }).click();
+  await pickCustomer(page, "York Ridge Apartments");
+  await page
+    .getByLabel("What changed?", { exact: true })
+    .fill("Flooring change");
+  const amount = page.getByLabel("Known change amount", { exact: true });
+  for (const invalid of ["abc", "-12", "1.001"]) {
+    await amount.fill(invalid);
+    await page
+      .getByRole("button", { name: "Send to estimating", exact: true })
+      .click();
+    await expect(amount).toHaveAttribute("aria-invalid", "true");
+    expect(api.saved).toHaveLength(0);
+  }
+  await amount.fill("");
+  await page.getByRole("button", { name: "Minus — deduction" }).click();
+  await page
+    .getByRole("button", { name: "Send to estimating", exact: true })
+    .click();
+  await expect(page.getByText(/Sent to estimating/)).toBeVisible();
+  expect(api.saved[0].knownChangeAmount).toBeUndefined();
+});
 
 test("the quick request tab opens from the header and survives a reload", async ({
   page,
@@ -399,13 +480,13 @@ test("checkbox answers are copied for Dash before submission and saved with the 
   await page
     .getByLabel("What changed?", { exact: true })
     .fill("Credit for unused flooring.\nKeep this text.");
-  // The PM form asks no pricing questions: no estimate lines, no known amount.
+  // Estimate lines remain estimator-only; the known amount is optional.
   await expect(
     page.getByLabel("Estimate line number 1", { exact: true }),
   ).toHaveCount(0);
   await expect(
     page.getByLabel("Known change amount", { exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   for (const width of [320, 1440]) {
     await page.setViewportSize({ width, height: 1400 });
     await page.keyboard.press("Control+Home");

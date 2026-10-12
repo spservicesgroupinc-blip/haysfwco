@@ -283,6 +283,7 @@ function shapeCheck_(request) {
   if (!request || request.schemaVersion !== 2 || !request.id || typeof request.id !== "string" || request.id.length > 100 || !request.job) problem_("VALIDATION", "A valid version-2 request is required.");
   if (request.requestType !== undefined && ["change_order", "insurance_supplement"].indexOf(request.requestType) < 0) problem_("VALIDATION", "Choose a valid request type.");
   if (request.customerCredits !== undefined && typeof request.customerCredits !== "boolean") problem_("VALIDATION", "Customer credits must be a checkbox answer.");
+  if (request.knownChangeAmount !== undefined && (typeof request.knownChangeAmount !== "string" || (request.knownChangeAmount !== "" && !/^[+-]\d+(?:\.\d{1,2})?$/.test(request.knownChangeAmount)))) problem_("VALIDATION", "Enter a signed known change amount with at most two decimal places.");
   ["lineNumbers"].forEach(function(key) { if (request[key] !== undefined && typeof request[key] !== "string") problem_("VALIDATION", key + " must be text."); });
   if (request.lineNumbers && request.lineNumbers.trim() && !/^[+-][1-9]\d*(?:[\s,]+[+-][1-9]\d*)*$/.test(request.lineNumbers.trim())) problem_("VALIDATION", "Enter signed line numbers, such as +12, -34.");
   if (request.finalChangeOrder !== undefined) {
@@ -482,6 +483,10 @@ function sendEmail_(body) {
   }
 
   const lines = [];
+  const knownAmount = request.knownChangeAmount;
+  const knownAmountLabel = typeof knownAmount === "string" && /^[+-]\d+(?:\.\d{1,2})?$/.test(knownAmount)
+    ? knownAmount.charAt(0) + "$" + knownAmount.slice(1) + (knownAmount.charAt(0) === "+" ? " (Increase)" : " (Deduction)")
+    : "";
   lines.push("Hays + Sons Complete Restoration - Change Order");
   lines.push("==================================================");
   lines.push("Job Number: " + (job.jobNumber || "—"));
@@ -492,6 +497,7 @@ function sendEmail_(body) {
   lines.push("Status: " + (request.status || "—"));
   if (request.requestType) lines.push("Request Type: " + request.requestType);
   if (request.customerCredits) lines.push("Customer Credits: " + request.customerCredits);
+  if (knownAmountLabel) lines.push("Known change amount: " + knownAmountLabel);
   if (job.originalContract) lines.push("Original Contract: $" + job.originalContract);
   if (job.previousChanges) lines.push("Previous Authorized Changes: $" + job.previousChanges);
 
@@ -550,6 +556,7 @@ function sendEmail_(body) {
     "<tr><td style='padding: 6px 0; color: #64748b;'><strong>Status:</strong></td><td>" + escapeHtml_(request.status || "—") + "</td></tr>" +
     (request.requestType ? "<tr><td style='padding: 6px 0; color: #64748b;'><strong>Request Type:</strong></td><td>" + escapeHtml_(request.requestType) + "</td></tr>" : "") +
     (request.customerCredits ? "<tr><td style='padding: 6px 0; color: #64748b;'><strong>Customer Credits:</strong></td><td>" + escapeHtml_(request.customerCredits) + "</td></tr>" : "") +
+    (knownAmountLabel ? "<tr><td style='padding: 6px 0; color: #64748b;'><strong>Known change amount:</strong></td><td>" + escapeHtml_(knownAmountLabel) + "</td></tr>" : "") +
     (job.originalContract ? "<tr><td style='padding: 6px 0; color: #64748b;'><strong>Original Contract:</strong></td><td>$" + escapeHtml_(job.originalContract) + "</td></tr>" : "") +
     (job.previousChanges ? "<tr><td style='padding: 6px 0; color: #64748b;'><strong>Previous Changes:</strong></td><td>$" + escapeHtml_(job.previousChanges) + "</td></tr>" : "") +
     "</table>" +

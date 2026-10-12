@@ -26,6 +26,8 @@ export interface ChangeRequest {
   schemaVersion: 2;
   requestType?: "change_order" | "insurance_supplement";
   customerCredits?: boolean;
+  /** Optional PM-provided amount, signed as an increase (+) or deduction (-). */
+  knownChangeAmount?: string;
   /** Signed estimate line references, e.g. +12, -34; kept as submitted text. */
   lineNumbers?: string;
   finalChangeOrder?: { scope: string; amount: string };

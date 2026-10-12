@@ -38,6 +38,7 @@ function intakeRequest(): ChangeRequest {
 }
 
 function mockBackend() {
+  const emails: { body: string; htmlBody: string }[] = [];
   const sheets = new Map<string, any>();
   const files = new Map<string, any>();
   const folders = new Map<string, any>();
@@ -172,6 +173,10 @@ function mockBackend() {
     getId: () => "sheet-1",
   };
   const sandbox: any = {
+    MailApp: {
+      sendEmail: (message: { body: string; htmlBody: string }) =>
+        emails.push(message),
+    },
     SpreadsheetApp: {
       openById: (id: string) => {
         assert.equal(id, "sheet-1");
@@ -234,6 +239,7 @@ function mockBackend() {
     sandbox,
   );
   return {
+    emails,
     sheets,
     files,
     folders,
@@ -294,6 +300,63 @@ function save(
 function submittedRequest(backend: ReturnType<typeof mockBackend>) {
   return save(backend, intakeRequest()).request as ChangeRequest;
 }
+
+test("known change amounts persist and reach both email formats with their sign", () => {
+  const backend = mockBackend();
+  for (const amount of ["+1250.19", "-250.00", "+0.00"]) {
+    const request = { ...intakeRequest(), knownChangeAmount: amount };
+    const saved = save(backend, request);
+    assert.equal(saved.ok, true);
+    assert.equal(saved.request.knownChangeAmount, amount);
+    // Email must use the stored request, even if a stale caller supplies another amount.
+    const result = backend.post({
+      action: "sendEmail",
+      requestId: request.id,
+      recipient: "review@example.com",
+      request: { ...request, knownChangeAmount: "+999.00" },
+    });
+    assert.equal(result.ok, true);
+    const email = backend.emails.at(-1)!;
+    const display = `${amount[0]}$${amount.slice(1)} (${amount[0] === "+" ? "Increase" : "Deduction"})`;
+    assert.ok(email.body.includes(`Known change amount: ${display}`));
+    assert.ok(email.htmlBody.includes(display));
+  }
+});
+
+test("known change amounts are optional and reject invalid submitted prices", () => {
+  const backend = mockBackend();
+  for (const amount of [undefined, "", "+12.3", "-0.50"]) {
+    assert.equal(
+      save(backend, { ...intakeRequest(), knownChangeAmount: amount }).ok,
+      true,
+    );
+  }
+  for (const amount of [
+    123,
+    "+abc",
+    "12.00",
+    "+1.001",
+    "--12.00",
+    "+<script>",
+  ]) {
+    const result = save(backend, {
+      ...intakeRequest(),
+      knownChangeAmount: amount,
+    } as any);
+    assert.equal(result.code, "VALIDATION");
+  }
+  const request = submittedRequest(backend);
+  assert.equal(
+    backend.post({
+      action: "sendEmail",
+      requestId: request.id,
+      recipient: "review@example.com",
+    }).ok,
+    true,
+  );
+  assert.ok(!backend.emails.at(-1)!.body.includes("Known change amount"));
+  assert.ok(!backend.emails.at(-1)!.htmlBody.includes("Known change amount"));
+});
 
 test("submitted requests can be edited without changing review state or losing scope", () => {
   const backend = mockBackend();
@@ -881,4 +944,3 @@ test("requests can be completely deleted by anyone via deleteRequest", async () 
     restore();
   }
 });
-

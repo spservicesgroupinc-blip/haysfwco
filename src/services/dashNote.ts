@@ -31,6 +31,8 @@ export function formatDashNote(
   const field = (label: string, value: string | undefined) =>
     lines.push(`${label}: ${value?.trim() ? value : "Not provided"}`);
   const job = request.job;
+  if (request.knownChangeAmount)
+    field("Known change amount", signedAmountLabel(request.knownChangeAmount));
   field("Customer", job.customer);
   field("Customer phone", job.customerPhone);
   field("Customer email", job.customerEmail);

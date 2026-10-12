@@ -25,7 +25,10 @@ Older requests show unanswered questions as **Not provided** until edited.
 Estimators set the estimate line references and the final change amount in
 **Finalize customer document**, choosing **Add / Remove** per line and
 **Increase / Credit** for the signed amount. The project manager's quick
-request does not ask for a price — pricing belongs to the estimator.
+request accepts an optional **Known change amount**. Choose **Plus** for an
+increase or **Minus** for a deduction. The signed amount is saved with the
+request and included in request emails, Dash notes, and estimator review.
+The estimator still sets the final customer price.
 Signed answers appear in Dash notes and PDFs.
 
 1. **Project managers** describe what changed. Create a request, enter the job and property details, add one card per room/work area (add, revise, or remove work; what and why), attach photos, estimate PDFs, or subcontractor quotes, and submit to estimating. The request lands in the shared queue immediately — there is no separate draft step.

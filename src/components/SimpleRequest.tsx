@@ -8,8 +8,10 @@ import {
   Mail,
   Mic,
   MicOff,
+  Minus,
   Paperclip,
   Pencil,
+  Plus,
   Send,
   X,
 } from "lucide-react";
@@ -122,7 +124,7 @@ function buildRequest(
   base: ChangeRequest | null,
   details: { job: JobEntry | null; customer: string; note: string } & Pick<
     ChangeRequest,
-    "requestType" | "customerCredits"
+    "requestType" | "customerCredits" | "knownChangeAmount"
   >,
 ): ChangeRequest {
   const request = base ?? createRequest();
@@ -134,6 +136,7 @@ function buildRequest(
     submittedAt: null,
     requestType: details.requestType,
     customerCredits: details.customerCredits,
+    knownChangeAmount: details.knownChangeAmount,
     job: {
       ...request.job,
       customer: details.customer,
@@ -226,6 +229,7 @@ export default function SimpleRequest(
   const directoryJobs = jobs.filter((job) => job.active);
   const customerId = useId();
   const noteId = useId();
+  const amountId = useId();
   const photoInput = useRef<HTMLInputElement>(null);
   const pdfInput = useRef<HTMLInputElement>(null);
   const recognition = useRef<SpeechRecognitionLike | null>(null);
@@ -245,6 +249,9 @@ export default function SimpleRequest(
   const [requestType, setRequestType] =
     useState<ChangeRequest["requestType"]>();
   const [customerCredits, setCustomerCredits] = useState(false);
+  const [amount, setAmount] = useState("");
+  const [amountSign, setAmountSign] = useState<"+" | "-">("+");
+  const [amountError, setAmountError] = useState("");
   const [photos, setPhotos] = useState<PhotoEntry[]>([]);
   const [pdf, setPdf] = useState<File | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -268,6 +275,13 @@ export default function SimpleRequest(
   const [voiceSupported] = useState(() => speechRecognition() !== null);
 
   const selectedJob = directoryJobs.find((job) => job.id === jobId) ?? null;
+  const amountText = amount.trim();
+  const validAmount = !amountText || /^\d+(?:\.\d{1,2})?$/.test(amountText);
+  const [amountDollars, amountCents = ""] = amountText.split(".");
+  const knownChangeAmount =
+    validAmount && amountText
+      ? `${amountSign}${amountDollars}.${amountCents.padEnd(2, "0")}`
+      : undefined;
   const editing = photos.find((photo) => photo.id === editingId) ?? null;
   const fallbackCustomer = !directoryJobs.length;
   const query = customerText.trim().toLowerCase();
@@ -457,6 +471,11 @@ export default function SimpleRequest(
         : "Add a note or at least one photo before sending.";
     setCustomerError(nextCustomerError);
     setContentError(nextContentError);
+    const nextAmountError = validAmount
+      ? ""
+      : "Enter dollars with at most two decimal places, and use Plus or Minus to choose the sign.";
+    setAmountError(nextAmountError);
+    if (nextAmountError) throw new Error(nextAmountError);
     if (nextCustomerError || nextContentError) {
       throw new Error(nextCustomerError || nextContentError);
     }
@@ -469,6 +488,7 @@ export default function SimpleRequest(
       note,
       requestType,
       customerCredits,
+      knownChangeAmount,
     });
     setProgress("Saving the request…");
     const saved = await saveRequest(request, prior?.revision ?? 0, newId());
@@ -479,10 +499,7 @@ export default function SimpleRequest(
     for (const photo of photos) {
       done += 1;
       setProgress(`Uploading photo ${done} of ${total}…`);
-      const prepared = await preparePhotoForUpload(
-        photo.blob,
-        photo.file.name,
-      );
+      const prepared = await preparePhotoForUpload(photo.blob, photo.file.name);
       const identity = uploadIdentityFor(photo.id);
       uploaded.push(
         await uploadAttachment(
@@ -564,7 +581,8 @@ export default function SimpleRequest(
       if (savedResult) {
         // The request was saved and submitted to estimating, but email delivery had an issue
         savedAttempt.current = null;
-        const msg = error instanceof Error ? error.message : "Email delivery issue";
+        const msg =
+          error instanceof Error ? error.message : "Email delivery issue";
         onDone(
           `Sent to estimating: ${savedResult.customer}${selectedJob?.jobNumber ? ` · job ${selectedJob.jobNumber}` : ""} (Note: ${msg}).`,
         );
@@ -587,7 +605,10 @@ export default function SimpleRequest(
     setSubmitError("");
     setBusy(true);
     const targetEmail = emailAddress.trim();
-    if (targetEmail && (!targetEmail.includes("@") || !targetEmail.includes("."))) {
+    if (
+      targetEmail &&
+      (!targetEmail.includes("@") || !targetEmail.includes("."))
+    ) {
       setEmailError("Please enter a valid email address or clear the field.");
       setBusy(false);
       return;
@@ -780,13 +801,76 @@ export default function SimpleRequest(
           />
         </section>
 
+        <section className="sr-section sr-amount-section">
+          <h2 className="sr-section-title">
+            Known change amount <span className="sr-optional">optional</span>
+          </h2>
+          <p className="sr-help" id={`${amountId}-help`}>
+            If you know the dollar amount, enter it here. Choose plus for an
+            added cost or minus for a deduction.
+          </p>
+          <div
+            className="sr-amount-sign"
+            role="group"
+            aria-label="Amount direction"
+          >
+            <button
+              type="button"
+              className={`button${amountSign === "+" ? " primary" : ""}`}
+              aria-label="Plus — increase"
+              aria-pressed={amountSign === "+"}
+              disabled={busy}
+              onClick={() => setAmountSign("+")}
+            >
+              <Plus size={18} aria-hidden="true" /> Plus
+            </button>
+            <button
+              type="button"
+              className={`button${amountSign === "-" ? " primary" : ""}`}
+              aria-label="Minus — deduction"
+              aria-pressed={amountSign === "-"}
+              disabled={busy}
+              onClick={() => setAmountSign("-")}
+            >
+              <Minus size={18} aria-hidden="true" /> Minus
+            </button>
+          </div>
+          <label className="sr-label" htmlFor={amountId}>
+            Known change amount
+          </label>
+          <div className="sr-amount-input">
+            <span aria-hidden="true">{amountSign}$</span>
+            <input
+              id={amountId}
+              className="sr-input"
+              type="text"
+              inputMode="decimal"
+              placeholder="0.00"
+              value={amount}
+              disabled={busy}
+              aria-describedby={`${amountId}-help${amountError ? ` ${amountId}-error` : ""}`}
+              aria-invalid={Boolean(amountError)}
+              onChange={(event) => {
+                setAmount(event.target.value);
+                setAmountError("");
+              }}
+            />
+          </div>
+          {amountError ? (
+            <p className="sr-error" id={`${amountId}-error`} role="alert">
+              {amountError}
+            </p>
+          ) : null}
+        </section>
+
         <section className="sr-section">
           <h2 className="sr-section-title">Photos</h2>
           {requestType === "insurance_supplement" ? (
             <div className="sr-insurance-photo-reminder" role="note">
               <Camera size={16} />
               <span>
-                Insurance supplements require photos. Please attach photos for insurance.
+                Insurance supplements require photos. Please attach photos for
+                insurance.
               </span>
             </div>
           ) : null}
@@ -970,7 +1054,9 @@ export default function SimpleRequest(
             )}
           </div>
           <p className="email-card-desc">
-            Enter an email address to send this change order and attachments directly. Sending automatically saves the change order, submits it to estimating, and returns to the home page.
+            Enter an email address to send this change order and attachments
+            directly. Sending automatically saves the change order, submits it
+            to estimating, and returns to the home page.
           </p>
           <div className="email-form">
             <div className="email-input-group">
@@ -1064,6 +1150,7 @@ export default function SimpleRequest(
                 note,
                 requestType,
                 customerCredits,
+                knownChangeAmount,
               }),
               [
                 ...photos.map((photo) => photo.file.name),

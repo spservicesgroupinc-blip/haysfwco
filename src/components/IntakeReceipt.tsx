@@ -1,6 +1,7 @@
 import { CheckCircle2, Download, Eye, FileText, ImageIcon } from "lucide-react";
 import type { ChangeRequest, RequestAttachment } from "../types";
 import { contractAmounts } from "../services/contract";
+import { signedAmountLabel } from "../services/changeOrder";
 import { requestTypeLabel, customerCreditsLabel } from "../services/dashNote";
 import "./IntakeReceipt.css";
 
@@ -62,6 +63,12 @@ export default function IntakeReceipt({
             <dt>Customer credits</dt>
             <dd>{customerCreditsLabel(request.customerCredits)}</dd>
           </div>
+          {request.knownChangeAmount ? (
+            <div>
+              <dt>Known change amount</dt>
+              <dd>{signedAmountLabel(request.knownChangeAmount)}</dd>
+            </div>
+          ) : null}
           <div>
             <dt>Job number</dt>
             <dd>{request.job.jobNumber || "—"}</dd>

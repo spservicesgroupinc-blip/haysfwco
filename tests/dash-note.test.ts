@@ -7,6 +7,7 @@ test("Dash note includes answers, customer details, full scope text and attachme
   const request = createRequest();
   request.requestType = "insurance_supplement";
   request.customerCredits = true;
+  request.knownChangeAmount = "-250.19";
   Object.assign(request.job, {
     customer: "José Customer",
     customerPhone: "555-0100",
@@ -43,6 +44,7 @@ test("Dash note includes answers, customer details, full scope text and attachme
   for (const expected of [
     "Insurance supplement",
     "Customer credits: Yes",
+    "Known change amount: -$250.19",
     "José Customer",
     "555-0100",
     "customer@example.com",
