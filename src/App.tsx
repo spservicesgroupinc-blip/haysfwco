@@ -17,6 +17,7 @@ import {
   Plus,
   Search,
   ShieldCheck,
+  Trash2,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -31,12 +32,14 @@ import {
 import { createRequestedChange } from "./services/requests";
 import {
   claimRequest,
+  deleteRequest,
   fetchAttachment,
   loadDashboard,
   openRequest,
   saveRequest,
   transitionRequest,
 } from "./services/storage";
+import ConfirmDeleteModal from "./components/ConfirmDeleteModal";
 import {
   HOME,
   destinationToView,
@@ -188,6 +191,10 @@ export default function App() {
   const [preview, setPreview] = useState<{ name: string; blob: Blob } | null>(
     null,
   );
+  const [requestToDelete, setRequestToDelete] = useState<
+    RequestSummary | ChangeRequest | null
+  >(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
   // A preview is pushed onto the history stack so the phone's back gesture
   // closes it. The two flags keep that bookkeeping off the routing path.
@@ -262,6 +269,28 @@ export default function App() {
   );
 
   const goHome = useCallback(() => goTo(HOME), [goTo]);
+
+  const handleDeleteRequest = useCallback(
+    async (id: string) => {
+      setIsDeleting(true);
+      try {
+        await deleteRequest(id);
+        setRequests((prev) => prev.filter((r) => r.id !== id));
+        setRequest(null);
+        setHomeNotice("Change order request was deleted successfully.");
+        setRequestToDelete(null);
+        if (viewRef.current.kind === "request" && viewRef.current.id === id) {
+          goHome();
+        }
+        void refresh();
+      } catch (err) {
+        setListError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setIsDeleting(false);
+      }
+    },
+    [goHome, refresh],
+  );
 
   const closePreview = useCallback(() => {
     if (!previewRef.current) return;
@@ -661,6 +690,7 @@ export default function App() {
               onReload={() => openRequest(request.id)}
               onBusy={setBusy}
               onLeaveGuard={registerLeaveGuard}
+              onDelete={handleDeleteRequest}
             />
           ) : openError ? (
             <div className="empty">
@@ -821,10 +851,18 @@ export default function App() {
             ) : (
               <div className="request-list">
                 {filteredRequests.map((item) => (
-                  <button
+                  <div
                     className="request-row"
                     key={item.id}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => void openRequestById(item.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        void openRequestById(item.id);
+                      }
+                    }}
                   >
                     <span className={`request-status status-${item.status}`}>
                       {STATUS_LABELS[item.status]}
@@ -858,9 +896,21 @@ export default function App() {
                           day: "numeric",
                         })}
                       </small>
+                      <button
+                        type="button"
+                        className="row-delete-btn"
+                        title="Delete request"
+                        aria-label={`Delete request for ${item.job.customer || item.id}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setRequestToDelete(item);
+                        }}
+                      >
+                        <Trash2 size={15} />
+                      </button>
                       <ArrowRight size={16} />
                     </span>
-                  </button>
+                  </div>
                 ))}
                 {!filteredRequests.length ? (
                   <p className="shell-empty-filter">
@@ -877,6 +927,30 @@ export default function App() {
         </main>
       )}
       <AttachmentPreview preview={preview} onClose={closePreview} />
+      <ConfirmDeleteModal
+        isOpen={Boolean(requestToDelete)}
+        title="Are you sure you want to delete?"
+        message="Are you sure you want to delete this change order request? This will permanently remove the request and all uploaded attachments from the Google Sheet and Drive. This action cannot be undone."
+        itemSummary={
+          requestToDelete
+            ? {
+                customer: requestToDelete.job?.customer || "Untitled Request",
+                jobNumber: requestToDelete.job?.jobNumber || "—",
+                orderNumber: requestToDelete.job?.orderNumber || "—",
+                status: requestToDelete.status,
+              }
+            : undefined
+        }
+        busy={isDeleting}
+        onConfirm={() => {
+          if (requestToDelete) {
+            void handleDeleteRequest(requestToDelete.id);
+          }
+        }}
+        onCancel={() => {
+          if (!isDeleting) setRequestToDelete(null);
+        }}
+      />
     </div>
   );
 }

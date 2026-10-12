@@ -7,6 +7,7 @@ import { createRequest, createRequestedChange } from "../src/services/requests";
 import {
   openRequest,
   saveRequest,
+  deleteRequest,
   listRequests,
   listJobs,
   importJobs,
@@ -64,9 +65,10 @@ function mockBackend() {
     };
   }
   function folder(name: string, id = `folder-${++counter}`): any {
-    const result = {
+    const result: any = {
       id,
       name,
+      trashed: false,
       getId: () => id,
       getName: () => name,
       createFolder: (nextName: string) => folder(nextName),
@@ -82,6 +84,9 @@ function mockBackend() {
           ),
         ),
       createFile: (source: any) => file(source, id),
+      setTrashed: (trashed: boolean) => {
+        result.trashed = trashed;
+      },
     };
     folders.set(id, result);
     return result;
@@ -861,3 +866,19 @@ test("loadDashboard loads requests and jobs and falls back when bootstrap is mis
     globalThis.fetch = original;
   }
 });
+
+test("requests can be completely deleted by anyone via deleteRequest", async () => {
+  const backend = mockBackend();
+  const restore = backend.installFetch();
+  try {
+    const initial = intakeRequest();
+    const saved = await saveRequest(initial, 0, randomUUID());
+    assert.equal((await listRequests()).length, 1);
+    const deleteResult = await deleteRequest(saved.id);
+    assert.equal(deleteResult.ok, true);
+    assert.equal((await listRequests()).length, 0);
+  } finally {
+    restore();
+  }
+});
+

@@ -7,6 +7,7 @@ import {
   Paperclip,
   Pencil,
   Send,
+  Trash2,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -14,6 +15,7 @@ import type { ChangeRequest, RequestAttachment } from "../types";
 import IntakeReceipt from "./IntakeReceipt";
 import RequestEditor from "./RequestEditor";
 import CopyDashNote from "./CopyDashNote";
+import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import { formatDashNote } from "../services/dashNote";
 import { sendRequestEmail } from "../services/storage";
 import "./RequestReview.css";
@@ -32,6 +34,7 @@ export default function RequestReview({
   onReload,
   onBusy,
   onLeaveGuard,
+  onDelete,
 }: {
   request: ChangeRequest;
   busy: string;
@@ -47,6 +50,7 @@ export default function RequestReview({
   onReload: () => Promise<ChangeRequest>;
   onBusy: (message: string) => void;
   onLeaveGuard: (guard: (() => boolean) | null) => void;
+  onDelete?: (id: string) => Promise<void> | void;
 }) {
   const [claimName, setClaimName] = useState("");
   const [question, setQuestion] = useState("");
@@ -57,6 +61,19 @@ export default function RequestReview({
   const [sendingEmail, setSendingEmail] = useState(false);
   const [emailSuccess, setEmailSuccess] = useState("");
   const [emailError, setEmailError] = useState("");
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  const handleDelete = async () => {
+    if (!onDelete) return;
+    setDeleting(true);
+    try {
+      await onDelete(request.id);
+    } finally {
+      setDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
 
   const handleSendEmail = async () => {
     const target = emailAddress.trim();
@@ -107,6 +124,18 @@ export default function RequestReview({
           <Download size={16} />
           Download summary PDF
         </button>
+        {onDelete ? (
+          <button
+            type="button"
+            className="button danger"
+            disabled={editing || Boolean(busy) || deleting}
+            onClick={() => setShowDeleteConfirm(true)}
+            title="Delete this change order request"
+          >
+            <Trash2 size={16} />
+            Delete request
+          </button>
+        ) : null}
       </div>
 
       <section className="review-card email-card">
@@ -372,6 +401,21 @@ export default function RequestReview({
           </div>
         )}
       </fieldset>
+
+      <ConfirmDeleteModal
+        isOpen={showDeleteConfirm}
+        title="Delete change order request?"
+        message="Are you sure you want to delete this change order request? This action will permanently remove the change order and all of its attached documents from the system. It cannot be undone."
+        itemSummary={{
+          customer: request.job?.customer || "Untitled Request",
+          jobNumber: request.job?.jobNumber || "Pending",
+          orderNumber: request.job?.orderNumber || "—",
+          status: request.status,
+        }}
+        busy={deleting}
+        onConfirm={() => void handleDelete()}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
     </div>
   );
 }

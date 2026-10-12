@@ -112,6 +112,7 @@ function doPost(e) {
   if (body.action === "transitionRequest") return guarded_(function () { return transitionRequest_(body); });
   if (body.action === "uploadAttachment") return guarded_(function () { return uploadAttachment_(body); });
   if (body.action === "importJobs") return guarded_(function () { return importJobs_(body); });
+  if (body.action === "deleteRequest") return guarded_(function () { return deleteRequest_(body); });
   if (body.action === "sendEmail") return guarded_(function () { return sendEmail_(body); });
   return fail_("Unknown action.");
 }
@@ -364,6 +365,30 @@ function transitionRequest_(body) {
     if (errors.length) problem_("VALIDATION", errors.join("\n"));
     request.status = target === "submitted" && request.estimatorName ? "in_review" : target;
     return commitRequest_(request, row, snapshot, body.mutationId);
+  });
+}
+function deleteRequest_(body) {
+  if (!body || !body.id) problem_("VALIDATION", "A request identifier is required to delete.");
+  return locked_(function() {
+    const row = requestRow_(body.id);
+    if (!row) {
+      return json_({ ok: true, id: body.id, message: "Request already deleted." });
+    }
+    try {
+      if (row.values[RC.FOLDER]) {
+        const folder = DriveApp.getFolderById(String(row.values[RC.FOLDER]));
+        folder.setTrashed(true);
+      } else if (row.values[RC.DATA]) {
+        const file = DriveApp.getFileById(String(row.values[RC.DATA]));
+        file.setTrashed(true);
+      }
+    } catch (e) {
+      // Continue even if Drive files are already removed
+    }
+    const sheet = requestsSheet_();
+    sheet.deleteRow(row.row);
+    SpreadsheetApp.flush();
+    return json_({ ok: true, id: body.id, message: "Request deleted successfully." });
   });
 }
 function uploadAttachment_(body) {

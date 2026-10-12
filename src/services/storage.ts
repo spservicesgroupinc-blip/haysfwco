@@ -255,12 +255,18 @@ function summarizeRequest(r: ChangeRequest): RequestSummary {
 }
 
 // Configured remote Apps Script URL
-const configuredUrl = env("VITE_APPS_SCRIPT_URL");
-const isRemoteConfigured = Boolean(
-  configuredUrl &&
-    (configuredUrl.startsWith("http://") || configuredUrl.startsWith("https://")),
-);
-const API_URL = isRemoteConfigured ? configuredUrl! : "/__api__";
+export const DEFAULT_APPS_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbwQSdaJDrJLko2KEIJnRJpCc2TpGsFE3F-mBhaXw0KxFucS7A5myLd04trcEwTLU8kR/exec";
+
+const rawConfiguredUrl = env("VITE_APPS_SCRIPT_URL");
+export const API_URL =
+  rawConfiguredUrl &&
+  (rawConfiguredUrl.startsWith("http://") ||
+    rawConfiguredUrl.startsWith("https://"))
+    ? rawConfiguredUrl
+    : DEFAULT_APPS_SCRIPT_URL;
+
+const isRemoteConfigured = true;
 
 function query(params: Record<string, string | undefined>): string {
   return Object.entries(params)
@@ -282,19 +288,32 @@ async function requestJson(
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     const text = await response.text();
+    const trimmed = text.trim();
+    if (trimmed.startsWith("<") || trimmed.startsWith("The page")) {
+      if (!response.ok) {
+        throw new ApiError(
+          `Service returned HTTP ${response.status} (${response.statusText || "error"})`,
+        );
+      }
+      throw new ApiError(
+        "The sync service returned an HTML error response instead of JSON.",
+      );
+    }
     try {
       return JSON.parse(text);
     } catch {
-      // If the response is not valid JSON (e.g. an HTML 404/500 page from Vercel or Google Drive),
-      // provide a friendly, recognizable error message instead of raw JSON syntax errors.
       if (!response.ok) {
-        throw new ApiError(`Service returned HTTP ${response.status} (${response.statusText || "error"})`);
+        throw new ApiError(
+          `Service returned HTTP ${response.status} (${response.statusText || "error"})`,
+        );
       }
       throw new ApiError("The sync service returned an invalid response.");
     }
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      throw new ApiError("The sync service did not respond in time. Try again.");
+      throw new ApiError(
+        "The sync service did not respond in time. Try again.",
+      );
     }
     throw error;
   } finally {
@@ -333,34 +352,13 @@ async function get<T>(params: Record<string, string | undefined>): Promise<T> {
   }
 
   const separator = API_URL.includes("?") ? "&" : "?";
-  try {
-    const payload = await requestJson(
-      `${API_URL}${separator}${query(params)}`,
-      {},
-      20000,
-    );
-    if (!payload || payload.ok === false) apiFailure(payload);
-    return payload as T;
-  } catch (error) {
-    // Fallback gracefully to local storage if the remote endpoint failed
-    if (params.action === "bootstrap") {
-      return {
-        ok: true,
-        requests: getLocalRequests().map(summarizeRequest),
-        jobs: getLocalJobs(),
-      } as unknown as T;
-    }
-    if (params.action === "listRequests") {
-      return {
-        ok: true,
-        requests: getLocalRequests().map(summarizeRequest),
-      } as unknown as T;
-    }
-    if (params.action === "listJobs") {
-      return { ok: true, jobs: getLocalJobs() } as unknown as T;
-    }
-    throw error;
-  }
+  const payload = await requestJson(
+    `${API_URL}${separator}${query(params)}`,
+    {},
+    20000,
+  );
+  if (!payload || payload.ok === false) apiFailure(payload);
+  return payload as T;
 }
 
 async function post<T>(body: Record<string, unknown>): Promise<T> {
@@ -454,6 +452,12 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
       return { ok: true, jobs } as unknown as T;
     }
 
+    if (action === "deleteRequest") {
+      const requests = getLocalRequests().filter((r) => r.id !== body.id);
+      saveLocalRequests(requests);
+      return { ok: true, id: body.id, message: "Request deleted." } as unknown as T;
+    }
+
     if (action === "sendEmail") {
       const { recipient } = body as { recipient: string; requestId?: string; request?: ChangeRequest };
       const requests = getLocalRequests();
@@ -481,7 +485,13 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
     if (!payload || payload.ok === false) apiFailure(payload);
     return payload as T;
   } catch (error) {
+    if (error instanceof ApiError) throw error;
     // If remote fails, fallback gracefully for offline/demo capabilities
+    if (body.action === "deleteRequest") {
+      const requests = getLocalRequests().filter((r) => r.id !== body.id);
+      saveLocalRequests(requests);
+      return { ok: true, id: body.id, message: "Request deleted locally." } as unknown as T;
+    }
     if (body.action === "importJobs" && Array.isArray(body.jobs)) {
       saveLocalJobs(body.jobs as JobEntry[]);
       return { ok: true, jobs: body.jobs } as unknown as T;
@@ -636,7 +646,21 @@ export async function listJobs(): Promise<JobEntry[]> {
 
 export async function importJobs(jobs: JobEntry[]): Promise<JobEntry[]> {
   const data = await post<{ jobs: JobEntry[] }>({ action: "importJobs", jobs });
-  return data.jobs;
+  const saved = Array.isArray(data.jobs) ? data.jobs : jobs;
+  saveLocalJobs(saved);
+  return saved;
+}
+
+export async function deleteRequest(
+  id: string,
+): Promise<{ ok: boolean; message?: string }> {
+  const data = await post<{ ok: boolean; message?: string }>({
+    action: "deleteRequest",
+    id,
+  });
+  const localRequests = getLocalRequests().filter((r) => r.id !== id);
+  saveLocalRequests(localRequests);
+  return data;
 }
 
 export async function sendRequestEmail(
@@ -671,9 +695,12 @@ export async function loadDashboard(): Promise<DashboardData> {
       requests: RequestSummary[];
       jobs: JobEntry[];
     }>({ action: "bootstrap" });
+    const requests = data.requests ?? [];
+    const jobs = data.jobs ?? [];
+    saveLocalJobs(jobs);
     return {
-      requests: data.requests ?? [],
-      jobs: data.jobs ?? [],
+      requests,
+      jobs,
     };
   } catch (error) {
     try {
@@ -681,6 +708,7 @@ export async function loadDashboard(): Promise<DashboardData> {
       let jobs: JobEntry[] = [];
       try {
         jobs = await listJobs();
+        saveLocalJobs(jobs);
       } catch {
         // jobs optional
       }
