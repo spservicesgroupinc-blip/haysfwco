@@ -692,6 +692,11 @@ export default function SimpleRequest(
                       type="button"
                       className="sr-match"
                       aria-label={`Use job ${job.jobNumber || "without a number"} for ${job.customer || "this customer"}`}
+                      // Keep focus on the input while the row is pressed. Without
+                      // this the input blurs first on browsers that do not focus a
+                      // button on press (macOS/iOS Safari), the list unmounts, and
+                      // the click never lands — so the pick looked like a no-op.
+                      onMouseDown={(event) => event.preventDefault()}
                       onClick={() => chooseJob(job)}
                     >
                       <strong>{job.customer || "No customer name"}</strong>
@@ -722,6 +727,18 @@ export default function SimpleRequest(
                   <dt>Address</dt>
                   <dd>{selectedJob.address || "—"}</dd>
                 </div>
+                {selectedJob.customerPhone ? (
+                  <div>
+                    <dt>Customer phone</dt>
+                    <dd>{selectedJob.customerPhone}</dd>
+                  </div>
+                ) : null}
+                {selectedJob.customerEmail ? (
+                  <div>
+                    <dt>Customer email</dt>
+                    <dd>{selectedJob.customerEmail}</dd>
+                  </div>
+                ) : null}
                 <div>
                   <dt>Project manager</dt>
                   <dd>{selectedJob.projectManager || "—"}</dd>
