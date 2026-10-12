@@ -1,0 +1,20 @@
+# Dependencies and cache
+node_modules/
+.npm
+.cache
+
+# Build outputs
+dist/
+
+# Tests & Playwright
+tests/
+test-results/
+playwright-report/
+
+# Scripts & temporary files
+tmp/
+scripts/
+
+# Environment files
+.env.local
+.env.*.local

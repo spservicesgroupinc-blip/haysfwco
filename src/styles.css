@@ -1451,7 +1451,9 @@ svg {
     letter-spacing: -1px;
   }
   .ops-head-actions {
+    order: -1;
     margin-top: 0;
+    margin-bottom: 2px;
     width: 100%;
   }
   .ops-head-actions .button {
