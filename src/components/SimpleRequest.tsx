@@ -4,6 +4,7 @@ import {
   Camera,
   CheckCircle2,
   FileText,
+  Images,
   Mail,
   Mic,
   MicOff,
@@ -307,6 +308,20 @@ export default function SimpleRequest(
     },
     [],
   );
+
+  /**
+   * Opens the picker for the source the PM pressed. `capture` is set on the
+   * shared input right before the picker opens: with it the phone goes straight
+   * to the camera, without it the OS offers the photo library. The attribute is
+   * not a React prop, so a re-render never puts it back.
+   */
+  const openPhotoPicker = (source: "camera" | "library") => {
+    const input = photoInput.current;
+    if (!input) return;
+    if (source === "camera") input.setAttribute("capture", "environment");
+    else input.removeAttribute("capture");
+    input.click();
+  };
 
   const addPhotos = (files: File[]) => {
     // Not every OS reports a photo's MIME type; a HEIC off Windows often has
@@ -782,12 +797,13 @@ export default function SimpleRequest(
           <input
             ref={photoInput}
             type="file"
-            // The explicit list (same as the full request form) makes iOS
-            // transcode HEIC library picks to JPEG; `image/*` hands the raw
-            // HEIC over, which the Apps Script endpoint rejects. Photos that
-            // still arrive in another format are converted before upload.
+            // One input backs both sources: the button that is pressed sets the
+            // `capture` attribute just before the picker opens, so the phone
+            // goes straight to the camera or shows the photo library. The
+            // explicit list (same as the full request form) makes iOS transcode
+            // HEIC library picks to JPEG; `image/*` would hand the raw HEIC
+            // over, which the Apps Script endpoint rejects.
             accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-            capture="environment"
             multiple
             hidden
             aria-label="Add photos"
@@ -798,15 +814,26 @@ export default function SimpleRequest(
               addPhotos(files);
             }}
           />
-          <button
-            type="button"
-            className="button primary sr-wide"
-            disabled={busy}
-            onClick={() => photoInput.current?.click()}
-          >
-            <Camera size={19} />
-            Add photos
-          </button>
+          <div className="sr-photo-sources">
+            <button
+              type="button"
+              className="button primary sr-photo-source"
+              disabled={busy}
+              onClick={() => openPhotoPicker("camera")}
+            >
+              <Camera size={19} />
+              Take photo
+            </button>
+            <button
+              type="button"
+              className="button sr-photo-source"
+              disabled={busy}
+              onClick={() => openPhotoPicker("library")}
+            >
+              <Images size={19} />
+              Choose from library
+            </button>
+          </div>
           {photos.length ? (
             <ul className="sr-photo-grid">
               {photos.map((photo, index) => (

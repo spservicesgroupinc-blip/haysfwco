@@ -153,6 +153,17 @@
   font-size: 15px;
   margin-top: 12px;
 }
+/* The two ways to bring a photo in: the camera, or the device's library. */
+.sr-photo-sources {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.simple-request .button.sr-photo-source {
+  width: 100%;
+  min-height: 54px;
+  font-size: 15px;
+}
 .sr-photo-grid {
   list-style: none;
   padding: 0;
@@ -313,6 +324,9 @@
   }
   .sr-photo-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .sr-photo-sources {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .sr-submit {
     display: flex;
