@@ -108,6 +108,7 @@ async function installMockApi(
   const actions: string[] = [];
   const uploads: Record<string, any>[] = [];
   const uploaded = new Map<string, any>();
+  const fileBytes = new Map<string, string>();
   const mutations = new Map<string, any>();
   const commit = (next: any) => {
     const previous = requests.get(next.id);
@@ -199,6 +200,7 @@ async function installMockApi(
             size: body.file.size,
             kind: body.file.kind,
           });
+        fileBytes.set(body.attachmentId, body.file.data);
         return respond({
           ok: true,
           attachment: uploaded.get(body.attachmentId),
@@ -248,7 +250,9 @@ async function installMockApi(
           ok: true,
           name: attachment?.name ?? "file",
           mimeType: attachment?.mimeType ?? "application/octet-stream",
-          data: Buffer.from(data).toString("base64"),
+          data:
+            fileBytes.get(attachment?.id) ??
+            Buffer.from(data).toString("base64"),
         });
       }
       default:
@@ -257,6 +261,59 @@ async function installMockApi(
   });
   return { requests, actions, uploads, uploaded };
 }
+
+test("customer form edits PDF fields, saves the exact PDF and preserves source attachments", async ({
+  page,
+}) => {
+  const api = await installMockApi(page, {
+    status: "in_review",
+    estimatorName: "Jamie Estimator",
+  });
+  await page.goto("/#/requests/r1");
+  await page
+    .getByRole("button", { name: "Prepare change order", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Customer change order" });
+  await expect(editor).toBeVisible();
+  await expect(editor.getByLabel("Customer name", { exact: true })).toHaveValue(
+    "York Ridge Apartments",
+  );
+  await expect(
+    editor.getByLabel("Original contract amount", { exact: true }),
+  ).toHaveValue("167045.81");
+  await expect(
+    editor.getByLabel("Final customer scope", { exact: true }),
+  ).toHaveValue("Wet insulation behind the kitchen wall");
+  await expect(
+    editor.getByLabel("Final change amount", { exact: true }),
+  ).toHaveValue("");
+  await editor
+    .getByLabel("Final change amount", { exact: true })
+    .fill("250.10");
+  await editor.getByRole("button", { name: "Credit", exact: true }).click();
+  await expect(
+    editor.getByText("New contract total: $166,795.71", { exact: true }),
+  ).toBeVisible();
+  await editor
+    .getByRole("button", { name: "Generate & save PDF", exact: true })
+    .click();
+  await expect(
+    editor.getByRole("status").filter({ hasText: "saved" }),
+  ).toBeVisible();
+  const saved = api.requests.get("r1");
+  expect(saved.customerDocument.attachmentId).toBeTruthy();
+  expect(saved.attachments).toHaveLength(3);
+  const downloadEvent = page.waitForEvent("download");
+  await editor
+    .getByRole("button", { name: "Download saved PDF", exact: true })
+    .click();
+  const download = await downloadEvent;
+  const bytes = await readFile((await download.path())!);
+  expect(bytes.toString("base64")).toBe(api.uploads[0].file.data);
+  expect(download.suggestedFilename()).toBe(
+    "change-order-F-26-0366-P-CO-01.pdf",
+  );
+});
 
 test("an estimator reviews, starts work, and marks the request complete", async ({
   page,
@@ -319,7 +376,7 @@ test("an estimator can send a request back for information and the PM responds",
   ).toBeVisible();
 });
 
-test("estimator saves final scope and credit, previews and downloads the customer PDF", async ({
+test("estimator edits the PDF, saves a credit, and downloads the stored document after completion", async ({
   page,
 }) => {
   const api = await installMockApi(page, {
@@ -330,92 +387,85 @@ test("estimator saves final scope and credit, previews and downloads the custome
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/#/requests/r1");
-  await expect(
-    page.getByRole("button", { name: "Download customer PDF", exact: true }),
-  ).toBeDisabled();
   await page
-    .getByRole("button", { name: "Finalize customer document", exact: true })
+    .getByRole("button", { name: "Prepare change order", exact: true })
     .click();
+  const editor = page.getByRole("dialog", { name: "Customer change order" });
   await expect(
     page.getByRole("button", { name: "Mark complete", exact: true }),
   ).toBeDisabled();
-  await page.getByLabel("Change-order number", { exact: true }).fill("CO-02");
-  await page
+  await expect(
+    editor.getByLabel("Contractor representative", { exact: true }),
+  ).toHaveValue("Jamie Estimator");
+  await editor.getByLabel("Change-order number", { exact: true }).fill("CO-02");
+  await editor
     .getByLabel("Change-order date", { exact: true })
     .fill("2026-10-11");
-  await page.getByLabel("Added days", { exact: true }).fill("2");
-  await expect(
-    page.getByLabel("Final customer scope", { exact: true }),
-  ).toHaveValue("Wet insulation behind the kitchen wall");
-  await expect(
-    page.getByLabel("Final change amount", { exact: true }),
-  ).toHaveValue("");
-  await expect(
-    page.getByLabel("Known change amount", { exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    page.getByLabel("Contractor representative", { exact: true }),
-  ).toHaveValue("Jamie Estimator");
-  await page
+  await editor.getByLabel("Added days", { exact: true }).fill("2");
+  await editor
     .getByLabel("Final customer scope", { exact: true })
     .fill("Agreed replacement of kitchen insulation.\nCredit for unused trim.");
-  const finalDirection = page.getByRole("group", {
-    name: "Final change amount direction",
-    exact: true,
-  });
-  await finalDirection
-    .getByRole("button", { name: "Credit", exact: true })
-    .click();
-  await page.getByLabel("Final change amount", { exact: true }).fill("250.10");
-  await page
+  await editor
+    .getByLabel("Final change amount", { exact: true })
+    .fill("250.10");
+  await editor.getByRole("button", { name: "Credit", exact: true }).click();
+  await editor
     .getByLabel("Previous authorized changes", { exact: true })
     .fill("25.09");
-  for (const width of [320, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
+  await expect(
+    editor.getByRole("button", {
+      name: "Edit Customer name on PDF",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await editor
+    .getByRole("button", { name: "Edit Customer name on PDF", exact: true })
+    .click();
+  const inline = editor.getByRole("group", { name: "Inline PDF field editor" });
+  await inline
+    .getByLabel("Customer name", { exact: true })
+    .fill("Corrected customer");
+  await inline.getByRole("button", { name: "Done editing field" }).click();
+  await expect(editor.getByLabel("Customer name", { exact: true })).toHaveValue(
+    "Corrected customer",
+  );
+  await expect(
+    editor.getByText("New contract total: $166,820.80", { exact: true }),
+  ).toBeVisible();
+  for (const width of [320, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await expect(
+      editor.getByText("Updating preview…", { exact: true }),
+    ).toHaveCount(0);
+    await expect(editor.locator(".document-canvas")).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= window.innerWidth,
       ),
     ).toBe(true);
     await page.screenshot({
-      path: `tmp/request-summary/customer-editor-${width}.png`,
-      fullPage: true,
+      path: `tmp/customer-document/editor-${width}.png`,
     });
   }
-  await page.getByRole("button", { name: "Save changes", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "Download customer PDF", exact: true }),
-  ).toBeEnabled();
-  const saved = api.requests.get("r1");
-  expect(saved.estimatorName).toBe("Jamie Estimator");
-  expect(saved.status).toBe("in_review");
-  expect(saved.finalChangeOrder.amount).toBe("-250.10");
-  await page
-    .getByRole("button", { name: "Finalize customer document", exact: true })
+  await editor
+    .getByRole("button", { name: "Generate & save PDF", exact: true })
     .click();
   await expect(
-    page.getByLabel("Final customer scope", { exact: true }),
-  ).toHaveValue(
-    "Agreed replacement of kitchen insulation.\nCredit for unused trim.",
-  );
-  await expect(
-    page.getByLabel("Final change amount", { exact: true }),
-  ).toHaveValue("250.10");
-  await expect(
-    page
-      .getByRole("group", {
-        name: "Final change amount direction",
-        exact: true,
-      })
-      .getByRole("button", { name: "Credit", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    editor.getByText("Change order and customer PDF saved.", { exact: true }),
+  ).toBeVisible();
+  const saved = api.requests.get("r1");
+  expect(saved.finalChangeOrder.amount).toBe("-250.10");
+  expect(saved.lineNumbers).toBe("+12, -34");
+  await editor.getByRole("button", { name: "Close change order" }).click();
   await page
-    .getByRole("button", { name: "Preview customer PDF", exact: true })
+    .getByRole("button", { name: "View saved PDF", exact: true })
     .click();
   await expect(
     page.getByRole("dialog", {
-      name: "change-order-F-26-0366-P.pdf",
+      name: "change-order-F-26-0366-P-CO-02.pdf",
       exact: true,
     }),
   ).toBeVisible();
@@ -423,83 +473,289 @@ test("estimator saves final scope and credit, previews and downloads the custome
     .getByRole("button", { name: "Close preview", exact: true })
     .click();
   await page
+    .getByRole("button", { name: "Prepare change order", exact: true })
+    .click();
+  await expect(editor.getByLabel("Customer name", { exact: true })).toHaveValue(
+    "Corrected customer",
+  );
+  await expect(
+    editor.getByLabel("Final change amount", { exact: true }),
+  ).toHaveValue("250.10");
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page
     .getByRole("button", { name: "Mark complete", exact: true })
     .click();
   await expect(
-    page.getByRole("button", {
-      name: "Finalize customer document",
-      exact: true,
-    }),
+    page.getByRole("button", { name: "Prepare change order", exact: true }),
   ).toHaveCount(0);
   const pending = page.waitForEvent("download");
   await page
-    .getByRole("button", { name: "Download customer PDF", exact: true })
+    .getByRole("button", { name: "Download saved PDF", exact: true })
     .click();
   const download = await pending;
-  expect(download.suggestedFilename()).toBe("change-order-F-26-0366-P.pdf");
-  const pdf = await getDocument({
-    data: new Uint8Array(await readFile((await download.path())!)),
-    disableFontFace: true,
-  }).promise;
+  const bytes = new Uint8Array(await readFile((await download.path())!));
+  const pdf = await getDocument({ data: bytes, disableFontFace: true }).promise;
   let text = "";
   for (let i = 1; i <= pdf.numPages; i++)
     text += (await (await pdf.getPage(i)).getTextContent()).items
       .map((item: any) => item.str)
       .join(" ");
   for (const expected of [
-    "Hays + Sons",
     "CO-02",
     "2026-10-11",
+    "Corrected customer",
     "Agreed replacement of kitchen insulation.",
     "Credit for unused trim.",
     "-$250.10",
     "$166,820.80",
-    "Owner signature",
-    "Contractor signature",
+    "Signature",
   ])
     expect(text).toContain(expected);
-  expect(text).not.toContain("999.00");
+  expect(text).not.toContain("DRAFT");
   expect(text).not.toContain("photo1.jpg");
   await pdf.destroy();
   expect(errors).toEqual([]);
 });
 
-test("estimate line references and submitted scope carry into document preparation, but the final price starts blank", async ({
+test("submitted scope fills the form but the final price starts blank", async ({
+  page,
+}) => {
+  const api = await installMockApi(page, {
+    status: "in_review",
+    estimatorName: "Jamie Estimator",
+    lineNumbers: "+12, -34",
+    knownChangeAmount: "+999.00",
+  });
+  await page.goto("/#/requests/r1");
+  await page
+    .getByRole("button", { name: "Prepare change order", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Customer change order" });
+  await expect(
+    editor.getByLabel("Final customer scope", { exact: true }),
+  ).toHaveValue(baseRequest.requestedChanges[0].description);
+  await expect(
+    editor.getByLabel("Final change amount", { exact: true }),
+  ).toHaveValue("");
+  await editor
+    .getByRole("button", { name: "Generate & save PDF", exact: true })
+    .click();
+  await expect(editor.getByRole("alert")).toContainText(
+    "Enter a final change amount",
+  );
+  expect(api.uploads).toHaveLength(0);
+  await editor
+    .getByRole("button", { name: "Save changes", exact: true })
+    .click();
+  await expect(
+    editor.getByRole("status").filter({ hasText: "changes saved" }),
+  ).toBeVisible();
+  expect(api.requests.get("r1").lineNumbers).toBe("+12, -34");
+  expect(api.requests.get("r1").finalChangeOrder.amount).toBe("");
+});
+
+for (const failure of ["save", "upload", "afterSave"] as const) {
+  test(`customer PDF generation retries ${failure} failures without duplicate uploads`, async ({
+    page,
+  }) => {
+    const failures: { save?: string; upload?: boolean; afterSave?: boolean } =
+      {};
+    if (failure === "save") failures.save = "SERVICE_ERROR";
+    else failures[failure] = true;
+    const api = await installMockApi(
+      page,
+      { status: "in_review", estimatorName: "Estimator" },
+      failures,
+    );
+    await page.goto("/#/requests/r1");
+    await page
+      .getByRole("button", { name: "Prepare change order", exact: true })
+      .click();
+    const editor = page.getByRole("dialog", { name: "Customer change order" });
+    await editor
+      .getByLabel("Final change amount", { exact: true })
+      .fill("0.00");
+    await editor
+      .getByRole("button", { name: "Generate & save PDF", exact: true })
+      .dblclick();
+    await expect(editor.getByRole("alert")).toBeVisible();
+    await editor.getByRole("button", { name: "Retry save" }).click();
+    await expect(
+      editor.getByText("Change order and customer PDF saved.", { exact: true }),
+    ).toBeVisible();
+    expect(api.uploaded.size).toBe(1);
+    expect(api.requests.get("r1").revision).toBe(2);
+    expect(new Set(api.uploads.map((body) => body.attachmentId)).size).toBe(1);
+  });
+}
+
+test("PDF edits are retained after conflicts and warn before discarding", async ({
+  page,
+}) => {
+  const api = await installMockApi(
+    page,
+    { status: "in_review", estimatorName: "Estimator" },
+    { save: "CONFLICT" },
+  );
+  await page.goto("/#/requests/r1");
+  await page
+    .getByRole("button", { name: "Prepare change order", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Customer change order" });
+  await editor
+    .getByLabel("Final change amount", { exact: true })
+    .fill("125.00");
+  await editor
+    .getByRole("button", { name: "Generate & save PDF", exact: true })
+    .click();
+  await expect(editor.getByRole("alert")).toContainText("newer revision");
+  await expect(
+    editor.getByLabel("Final change amount", { exact: true }),
+  ).toHaveValue("125.00");
+  await expect(editor.getByRole("button", { name: "Retry save" })).toHaveCount(
+    0,
+  );
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(editor).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await editor.getByRole("button", { name: "Reload latest request" }).click();
+  await expect(
+    editor.getByLabel("Final change amount", { exact: true }),
+  ).toHaveValue("");
+  expect(api.requests.get("r1").revision).toBe(1);
+});
+
+test("editing printed details removes the stale PDF, and generating again links only the new version", async ({
+  page,
+}) => {
+  const api = await installMockApi(page, {
+    status: "in_review",
+    estimatorName: "Estimator",
+  });
+  await page.goto("/#/requests/r1");
+  await page
+    .getByRole("button", { name: "Prepare change order", exact: true })
+    .click();
+  const editor = page.getByRole("dialog", { name: "Customer change order" });
+  await editor.getByLabel("Final change amount", { exact: true }).fill("0.00");
+  await editor
+    .getByRole("button", { name: "Generate & save PDF", exact: true })
+    .click();
+  await expect(
+    editor.getByText("Change order and customer PDF saved.", { exact: true }),
+  ).toBeVisible();
+  const first = api.requests.get("r1").customerDocument.attachmentId;
+  await editor
+    .getByRole("button", { name: "Generate & save PDF", exact: true })
+    .click();
+  await expect.poll(() => api.requests.get("r1").revision).toBe(3);
+  expect(api.uploads).toHaveLength(1);
+  await editor
+    .getByLabel("Original contract amount", { exact: true })
+    .fill("170000.01");
+  await expect(
+    editor.getByRole("button", { name: "Download saved PDF", exact: true }),
+  ).toBeDisabled();
+  await editor
+    .getByRole("button", { name: "Save changes", exact: true })
+    .click();
+  await expect(editor.getByText(/changes saved/)).toBeVisible();
+  expect(api.requests.get("r1").customerDocument).toBeUndefined();
+  expect(api.requests.get("r1").attachments).toHaveLength(2);
+  await editor
+    .getByRole("button", { name: "Generate & save PDF", exact: true })
+    .click();
+  await expect(
+    editor.getByText("Change order and customer PDF saved.", { exact: true }),
+  ).toBeVisible();
+  const saved = api.requests.get("r1");
+  expect(saved.customerDocument.attachmentId).not.toBe(first);
+  expect(saved.attachments).toHaveLength(3);
+  expect(api.uploaded.has(first)).toBe(true);
+  await editor.getByRole("button", { name: "Close change order" }).click();
+  await page.getByRole("button", { name: "Edit request", exact: true }).click();
+  await page
+    .getByLabel("Property address", { exact: true })
+    .fill("Corrected property address");
+  await page.getByRole("button", { name: "Save changes", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Edit request", exact: true }),
+  ).toBeVisible();
+  expect(api.requests.get("r1").customerDocument).toBeUndefined();
+});
+
+test("font loading during rapid edits renders the latest draft and preserves keyboard focus", async ({
   page,
 }) => {
   await installMockApi(page, {
     status: "in_review",
-    estimatorName: "Jamie Estimator",
-    lineNumbers: "+12, -34",
+    estimatorName: "Estimator",
+  });
+  let release!: () => void;
+  const hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let blocked = false;
+  await page.route(/NotoSans-Regular\.ttf(?:\?|$)/, async (route) => {
+    if (route.request().resourceType() === "fetch") {
+      blocked = true;
+      await hold;
+    }
+    await route.continue();
   });
   await page.goto("/#/requests/r1");
   await page
-    .getByRole("button", { name: "Finalize customer document", exact: true })
+    .getByRole("button", { name: "Prepare change order", exact: true })
     .click();
+  const editor = page.getByRole("dialog", { name: "Customer change order" });
+  try {
+    await expect.poll(() => blocked).toBe(true);
+    await editor
+      .getByLabel("Customer name", { exact: true })
+      .fill("Intermediate name");
+    await editor
+      .getByLabel("Customer name", { exact: true })
+      .fill("Latest draft customer");
+  } finally {
+    release();
+  }
   await expect(
-    page.getByLabel("Final customer scope", { exact: true }),
-  ).toHaveValue(baseRequest.requestedChanges[0].description);
-  // The estimator owns pricing now: the final amount starts blank.
-  await expect(
-    page.getByLabel("Final change amount", { exact: true }),
-  ).toHaveValue("");
-  await expect(
-    page.getByLabel("Estimate line number 1", { exact: true }),
-  ).toHaveValue("12");
-  await expect(
-    page.getByLabel("Estimate line number 2", { exact: true }),
-  ).toHaveValue("34");
-  await expect(
-    page
-      .getByRole("group", { name: "Action for estimate line 2", exact: true })
-      .getByRole("button", { name: "Remove", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(
-    page.getByLabel("Contractor representative", { exact: true }),
-  ).toHaveValue("Jamie Estimator");
-  await expect(page.getByLabel("Customer name", { exact: true })).toHaveValue(
-    baseRequest.job.customer,
+    editor.getByText("Updating preview…", { exact: true }),
+  ).toHaveCount(0);
+  await expect(editor.locator(".document-canvas")).toHaveAttribute(
+    "aria-busy",
+    "false",
   );
+  await editor
+    .getByRole("button", { name: "Edit Customer name on PDF", exact: true })
+    .click();
+  const inline = editor.getByRole("group", { name: "Inline PDF field editor" });
+  const name = inline.getByLabel("Customer name", { exact: true });
+  await expect(name).toHaveValue("Latest draft customer");
+  await name.press("End");
+  await name.pressSequentially(" final", { delay: 80 });
+  await expect(name).toBeFocused();
+  await expect(name).toHaveValue("Latest draft customer final");
+  await inline.getByRole("button", { name: "Done editing field" }).click();
+  await expect(
+    editor.getByText("Updating preview…", { exact: true }),
+  ).toHaveCount(0);
+  await expect(editor.locator(".document-canvas")).toHaveAttribute(
+    "aria-busy",
+    "false",
+  );
+  await page.screenshot({ path: "tmp/customer-document/latest-preview.png" });
+  await editor.getByRole("button", { name: "Cancel", exact: true }).focus();
+  await page.keyboard.press("Tab");
+  await expect(
+    editor.getByRole("button", { name: "Fields", exact: true }),
+  ).toBeFocused();
+  page.once("dialog", (dialog) => dialog.accept());
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "Prepare change order", exact: true }),
+  ).toBeFocused();
 });
 
 test("the review page previews a photo and downloads an attachment", async ({

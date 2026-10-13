@@ -31,6 +31,12 @@ export interface ChangeRequest {
   /** Signed estimate line references, e.g. +12, -34; kept as submitted text. */
   lineNumbers?: string;
   finalChangeOrder?: { scope: string; amount: string };
+  /** Exact customer PDF saved in this request's Drive folder. */
+  customerDocument?: {
+    attachmentId: string;
+    inputFingerprint: string;
+    templateVersion: number;
+  };
   id: string;
   revision: number;
   createdAt: string;

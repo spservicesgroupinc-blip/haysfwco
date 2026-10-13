@@ -146,12 +146,25 @@ be edited. Keep the backend update in place if rolling back the frontend.
   full documents.
 - **Revisions**: saves and status changes carry an expected revision and a
   retry identifier, so a stale tab cannot overwrite a newer edit.
-- **Customer documents**: optional `lineNumbers` and `finalChangeOrder`
-  (scope and signed amount) are stored in the existing version-2 request
-  snapshot. No sheet columns or data migration are needed. Deploy the updated
-  Apps Script validation **before** the frontend build. Customer PDFs are
-  generated locally from saved information; they do not upload a signed
-  document or send anything to the customer automatically.
+- **Customer documents**: optional `lineNumbers`, `finalChangeOrder` (scope and
+  signed amount), and `customerDocument` (attachment ID, input fingerprint,
+  template version) are stored in the existing version-2 request snapshot.
+  **Prepare change order** opens the original form with editable PDF fields.
+  **Save changes** stores draft values; **Generate & save PDF** validates the
+  final data, uploads the unsigned customer PDF, and links it to the request.
+  No sheet columns or data migration are needed. Deploy the updated Apps Script
+  validation **before** the frontend build, updating the existing deployment so
+  the API URL stays the same. The backend verifies PDF ownership and the SHA-256
+  fingerprint of printed inputs. Editing those inputs unlinks the stale PDF;
+  regenerating replaces the active document while leaving older files in Drive.
+  Do not trash those files: earlier revision snapshots may reference them.
+  Existing email actions include the current PDF among the saved attachments;
+  generation itself does not email anything or create a signed document.
+  Completed requests can download their stored PDF but cannot edit it. Older
+  completed requests without a customer PDF remain readable without inventing
+  a document. On rollout, verify generation, reopening, a price correction,
+  regeneration, and download after completion. Keep the compatible backend in
+  place if rolling back the frontend.
 - **Local tests** expect the default local API path (`/__api__`) and are mocked
   in Playwright. Do not point `.env.local` at the real URL while running the
   browser tests.
