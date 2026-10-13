@@ -483,3 +483,32 @@
   }
 }
 
+.submission-notifications {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 100;
+  width: min(460px, calc(100vw - 32px));
+  max-height: 50vh;
+  overflow-y: auto;
+  display: grid;
+  gap: 10px;
+  pointer-events: none;
+}
+.submission-notification {
+  pointer-events: auto;
+  margin: 0;
+  box-shadow: 0 4px 20px rgb(0 0 0 / 15%);
+  flex-wrap: wrap;
+}
+.submission-notification > svg {
+  flex-shrink: 0;
+}
+.submission-notification > span {
+  flex: 1;
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+.submission-notification.neutral {
+  color: #303b49;
+}

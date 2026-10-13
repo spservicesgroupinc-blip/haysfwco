@@ -2,7 +2,6 @@ import { useEffect, useId, useRef, useState } from "react";
 import {
   AlertCircle,
   Camera,
-  CheckCircle2,
   FileText,
   Images,
   Mail,
@@ -15,19 +14,10 @@ import {
   Send,
   X,
 } from "lucide-react";
-import {
-  newId,
-  type ChangeRequest,
-  type JobEntry,
-  type RequestAttachment,
-} from "../types";
+import { newId, type ChangeRequest, type JobEntry } from "../types";
 import { createRequest, createRequestedChange } from "../services/requests";
-import {
-  blobToBase64,
-  saveRequest,
-  sendRequestEmail,
-  uploadAttachment,
-} from "../services/storage";
+import { blobToBase64 } from "../services/storage";
+import { createRequestSubmission } from "../services/requestSubmission";
 import {
   looksLikePhotoFile,
   preparePhotoForUpload,
@@ -41,8 +31,8 @@ import "./SimpleRequest.css";
 export interface SimpleRequestProps {
   /** The admin-managed customer/job directory. */
   jobs: JobEntry[];
-  /** Called after the request was sent; the message is shown on the dashboard. */
-  onDone: (message: string) => void;
+  /** The shell runs the task after returning home and owns its notification. */
+  onSubmit: (send: () => Promise<string>) => void;
 }
 
 /** One photo the PM added, with its annotated replacement once edited. */
@@ -223,7 +213,7 @@ function PhotoTile({
 export default function SimpleRequest(
   props: SimpleRequestProps,
 ): React.ReactElement {
-  const { jobs, onDone } = props;
+  const { jobs, onSubmit } = props;
   // Only active directory rows are offered; without any, the page falls back to
   // a typed customer name so it still works.
   const directoryJobs = jobs.filter((job) => job.active);
@@ -233,11 +223,7 @@ export default function SimpleRequest(
   const photoInput = useRef<HTMLInputElement>(null);
   const pdfInput = useRef<HTMLInputElement>(null);
   const recognition = useRef<SpeechRecognitionLike | null>(null);
-  // The request + revision from a failed attempt, reused by the retry.
-  const savedAttempt = useRef<{
-    request: ChangeRequest;
-    revision: number;
-  } | null>(null);
+  const submissionStarted = useRef(false);
 
   const [jobId, setJobId] = useState("");
   // The customer/job search text. In directory mode it is the type-ahead query
@@ -256,13 +242,9 @@ export default function SimpleRequest(
   const [pdf, setPdf] = useState<File | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [progress, setProgress] = useState("");
-  const [submitError, setSubmitError] = useState("");
   const [customerError, setCustomerError] = useState("");
   const [contentError, setContentError] = useState("");
   const [emailAddress, setEmailAddress] = useState("");
-  const [sendingEmail, setSendingEmail] = useState(false);
-  const [emailSuccess, setEmailSuccess] = useState("");
   const [emailError, setEmailError] = useState("");
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
@@ -440,25 +422,8 @@ export default function SimpleRequest(
     }
   };
 
-  // One stable upload identity per photo, plus one for the PDF. The Apps Script
-  // upload endpoint hands back the file it already holds when it sees the same
-  // (attachmentId, mutationId) pair again, so retrying a partial failure cannot
-  // leave a second copy of the same photo in Drive.
-  const uploadIdentity = useRef(
-    new Map<string, { attachmentId: string; mutationId: string }>(),
-  );
-  const uploadIdentityFor = (key: string) => {
-    const existing = uploadIdentity.current.get(key);
-    if (existing) return existing;
-    const created = { attachmentId: newId(), mutationId: newId() };
-    uploadIdentity.current.set(key, created);
-    return created;
-  };
-
-  const ensureSavedAndUploaded = async (): Promise<{
-    current: ChangeRequest;
-    customer: string;
-  }> => {
+  const submit = () => {
+    if (submissionStarted.current) return;
     const customer = (selectedJob?.customer ?? customerText).trim();
     const nextCustomerError = customer
       ? ""
@@ -469,20 +434,29 @@ export default function SimpleRequest(
       note.trim() || photos.length
         ? ""
         : "Add a note or at least one photo before sending.";
-    setCustomerError(nextCustomerError);
-    setContentError(nextContentError);
     const nextAmountError = validAmount
       ? ""
       : "Enter dollars with at most two decimal places, and use Plus or Minus to choose the sign.";
+    const targetEmail = emailAddress.trim();
+    const nextEmailError =
+      targetEmail && (!targetEmail.includes("@") || !targetEmail.includes("."))
+        ? "Please enter a valid email address or clear the field."
+        : "";
+    setCustomerError(nextCustomerError);
+    setContentError(nextContentError);
     setAmountError(nextAmountError);
-    if (nextAmountError) throw new Error(nextAmountError);
-    if (nextCustomerError || nextContentError) {
-      throw new Error(nextCustomerError || nextContentError);
-    }
+    setEmailError(nextEmailError);
+    if (
+      nextCustomerError ||
+      nextContentError ||
+      nextAmountError ||
+      nextEmailError
+    )
+      return;
     if (listening) stopListening();
-
-    const prior = savedAttempt.current;
-    const request = buildRequest(prior?.request ?? null, {
+    submissionStarted.current = true;
+    setBusy(true);
+    const request = buildRequest(null, {
       job: selectedJob,
       customer,
       note,
@@ -490,161 +464,42 @@ export default function SimpleRequest(
       customerCredits,
       knownChangeAmount,
     });
-    setProgress("Saving the request…");
-    const saved = await saveRequest(request, prior?.revision ?? 0, newId());
-    savedAttempt.current = { request: saved, revision: saved.revision };
-    const total = photos.length + (pdf ? 1 : 0);
-    let done = 0;
-    const uploaded: RequestAttachment[] = [];
-    for (const photo of photos) {
-      done += 1;
-      setProgress(`Uploading photo ${done} of ${total}…`);
-      const prepared = await preparePhotoForUpload(photo.blob, photo.file.name);
-      const identity = uploadIdentityFor(photo.id);
-      uploaded.push(
-        await uploadAttachment(
-          saved.id,
-          {
-            name: prepared.name,
-            mimeType: prepared.mimeType,
-            size: prepared.size,
-            kind: "photo",
-            data: await blobToBase64(prepared.blob),
-          },
-          identity.attachmentId,
-          identity.mutationId,
-        ),
-      );
-    }
-    if (pdf) {
-      done += 1;
-      setProgress(`Uploading ${pdf.name}…`);
-      const identity = uploadIdentityFor("pdf");
-      uploaded.push(
-        await uploadAttachment(
-          saved.id,
-          {
-            name: pdf.name,
-            mimeType: pdf.type || "application/pdf",
-            size: pdf.size,
-            kind: "document",
-            data: await blobToBase64(pdf),
-          },
-          identity.attachmentId,
-          identity.mutationId,
-        ),
-      );
-    }
-    let current = saved;
-    if (uploaded.length) {
-      setProgress("Attaching the files…");
-      current = await saveRequest(
-        { ...request, attachments: uploaded },
-        saved.revision,
-        newId(),
-      );
-      savedAttempt.current = { request: current, revision: current.revision };
-    }
-    return { current, customer };
-  };
-
-  const handleSendEmail = async () => {
-    if (busy || sendingEmail) return;
-    const targetEmail = emailAddress.trim();
-    if (
-      !targetEmail ||
-      !targetEmail.includes("@") ||
-      !targetEmail.includes(".")
-    ) {
-      setEmailError("Please enter a valid email address.");
-      return;
-    }
-    setEmailError("");
-    setEmailSuccess("");
-    setSendingEmail(true);
-    setBusy(true);
-    let savedResult: { current: ChangeRequest; customer: string } | null = null;
-    try {
-      savedResult = await ensureSavedAndUploaded();
-      setProgress(`Sending email to ${targetEmail}…`);
-      await sendRequestEmail(
-        savedResult.current.id,
+    onSubmit(
+      createRequestSubmission(
+        request,
+        [
+          ...photos.map((photo) => ({
+            prepare: async () => {
+              const prepared = await preparePhotoForUpload(
+                photo.blob,
+                photo.file.name,
+              );
+              return {
+                name: prepared.name,
+                mimeType: prepared.mimeType,
+                size: prepared.size,
+                kind: "photo" as const,
+                data: await blobToBase64(prepared.blob),
+              };
+            },
+          })),
+          ...(pdf
+            ? [
+                {
+                  prepare: async () => ({
+                    name: pdf.name,
+                    mimeType: pdf.type || "application/pdf",
+                    size: pdf.size,
+                    kind: "document" as const,
+                    data: await blobToBase64(pdf),
+                  }),
+                },
+              ]
+            : []),
+        ],
         targetEmail,
-        undefined,
-        savedResult.current,
-      );
-      savedAttempt.current = null;
-      onDone(
-        `Sent to estimating & emailed to ${targetEmail}: ${savedResult.customer}${selectedJob?.jobNumber ? ` · job ${selectedJob.jobNumber}` : ""}.`,
-      );
-    } catch (error) {
-      if (savedResult) {
-        // The request was saved and submitted to estimating, but email delivery had an issue
-        savedAttempt.current = null;
-        const msg =
-          error instanceof Error ? error.message : "Email delivery issue";
-        onDone(
-          `Sent to estimating: ${savedResult.customer}${selectedJob?.jobNumber ? ` · job ${selectedJob.jobNumber}` : ""} (Note: ${msg}).`,
-        );
-      } else {
-        setEmailError(
-          error instanceof Error
-            ? error.message
-            : "Failed to send email. Check your connection and try again.",
-        );
-      }
-    } finally {
-      setSendingEmail(false);
-      setBusy(false);
-      setProgress("");
-    }
-  };
-
-  const submit = async () => {
-    if (busy || sendingEmail) return;
-    setSubmitError("");
-    setBusy(true);
-    const targetEmail = emailAddress.trim();
-    if (
-      targetEmail &&
-      (!targetEmail.includes("@") || !targetEmail.includes("."))
-    ) {
-      setEmailError("Please enter a valid email address or clear the field.");
-      setBusy(false);
-      return;
-    }
-    let savedResult: { current: ChangeRequest; customer: string } | null = null;
-    try {
-      savedResult = await ensureSavedAndUploaded();
-      let emailNotice = "";
-      if (targetEmail) {
-        try {
-          setProgress(`Sending email to ${targetEmail}…`);
-          await sendRequestEmail(
-            savedResult.current.id,
-            targetEmail,
-            undefined,
-            savedResult.current,
-          );
-          emailNotice = ` & emailed to ${targetEmail}`;
-        } catch (emailErr) {
-          emailNotice = ` (email failed: ${emailErr instanceof Error ? emailErr.message : "could not deliver"})`;
-        }
-      }
-      savedAttempt.current = null;
-      onDone(
-        `Sent to estimating${emailNotice}: ${savedResult.customer}${selectedJob?.jobNumber ? ` · job ${selectedJob.jobNumber}` : ""}.`,
-      );
-    } catch (error) {
-      setSubmitError(
-        error instanceof Error
-          ? error.message
-          : "The request could not be sent. Check the connection and try again.",
-      );
-    } finally {
-      setBusy(false);
-      setProgress("");
-    }
+      ),
+    );
   };
 
   return (
@@ -654,7 +509,7 @@ export default function SimpleRequest(
         noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          void submit();
+          submit();
         }}
       >
         <header className="sr-head">
@@ -1070,16 +925,16 @@ export default function SimpleRequest(
                 }}
                 placeholder="Enter recipient email (e.g. rrussell@haysandsons.com)"
                 aria-label="Recipient email address"
-                disabled={busy || sendingEmail}
+                disabled={busy}
               />
               <button
                 type="button"
                 className="button primary"
-                disabled={!emailAddress.trim() || busy || sendingEmail}
-                onClick={() => void handleSendEmail()}
+                disabled={!emailAddress.trim() || busy}
+                onClick={() => submit()}
               >
                 <Send size={15} />
-                {sendingEmail
+                {busy
                   ? "Sending email & submitting…"
                   : "Send email & submit to estimating"}
               </button>
@@ -1109,21 +964,6 @@ export default function SimpleRequest(
             </div>
           </div>
 
-          {emailSuccess ? (
-            <div className="email-alert success" role="status">
-              <CheckCircle2 size={16} />
-              <span>{emailSuccess}</span>
-              <button
-                type="button"
-                className="icon-button"
-                aria-label="Dismiss message"
-                onClick={() => setEmailSuccess("")}
-              >
-                <X size={14} />
-              </button>
-            </div>
-          ) : null}
-
           {emailError ? (
             <div className="email-alert error" role="alert">
               <AlertCircle size={16} />
@@ -1144,7 +984,7 @@ export default function SimpleRequest(
           <CopyDashNote
             disabled={busy}
             text={formatDashNote(
-              buildRequest(savedAttempt.current?.request ?? null, {
+              buildRequest(null, {
                 job: selectedJob,
                 customer: (selectedJob?.customer ?? customerText).trim(),
                 note,
@@ -1158,23 +998,13 @@ export default function SimpleRequest(
               ],
             )}
           />
-          {submitError ? (
-            <p className="sr-error" role="alert">
-              {submitError}
-            </p>
-          ) : null}
-          {progress ? (
-            <p className="sr-help" aria-live="polite">
-              {progress}
-            </p>
-          ) : null}
           <button
             type="submit"
             className="button primary sr-submit-button"
-            disabled={busy || sendingEmail}
+            disabled={busy}
           >
             <Send size={19} />
-            {busy || sendingEmail
+            {busy
               ? "Submitting…"
               : emailAddress.trim()
                 ? "Send email & submit to estimating"

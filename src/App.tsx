@@ -184,6 +184,15 @@ export default function App() {
   const [homeStatus, setHomeStatus] = useState<StatKey>("all");
   // Confirmation for the quick PM flow, shown on the dashboard it returns to.
   const [homeNotice, setHomeNotice] = useState("");
+  const [submissions, setSubmissions] = useState<
+    {
+      id: string;
+      status: "pending" | "success" | "error";
+      message: string;
+      send: () => Promise<string>;
+    }[]
+  >([]);
+  const activeSubmissions = useRef(new Set<string>());
 
   const [request, setRequest] = useState<ChangeRequest | null>(null);
   const [saveError, setSaveError] = useState("");
@@ -386,13 +395,44 @@ export default function App() {
     }
   }
 
-  /**
-   * The quick PM form saves, uploads and submits its own request, so there is
-   * no editor to open here: land back on the dashboard with a confirmation.
-   */
-  function quickRequestDone(message: string) {
-    setHomeNotice(message);
+  async function runSubmission(id: string, send: () => Promise<string>) {
+    if (activeSubmissions.current.has(id)) return;
+    activeSubmissions.current.add(id);
+    const update = (status: "pending" | "success" | "error", message: string) =>
+      setSubmissions((items) =>
+        items.map((item) =>
+          item.id === id ? { ...item, status, message } : item,
+        ),
+      );
+    update("pending", "Submitting your change order…");
+    try {
+      const message = await send();
+      update("success", message);
+      void refresh();
+    } catch (error) {
+      update(
+        "error",
+        `Submission could not be completed: ${error instanceof Error ? error.message : "Check your connection and try again."}`,
+      );
+    } finally {
+      activeSubmissions.current.delete(id);
+    }
+  }
+
+  function submitQuickRequest(send: () => Promise<string>) {
+    const id = newId();
+    setSubmissions((items) => [
+      ...items,
+      {
+        id,
+        send,
+        status: "pending",
+        message: "Submitting your change order…",
+      },
+    ]);
     goHome();
+    // Let the home screen render before image preparation or network work.
+    window.setTimeout(() => void runSubmission(id, send), 0);
   }
 
   async function claim(name: string) {
@@ -649,7 +689,7 @@ export default function App() {
       ) : null}
       {view.kind === "simple" ? (
         <main className="shell-request" ref={mainRef} tabIndex={-1}>
-          <SimpleRequest jobs={jobs} onDone={quickRequestDone} />
+          <SimpleRequest jobs={jobs} onSubmit={submitQuickRequest} />
         </main>
       ) : view.kind === "jobs" ? (
         <main className="shell-request" ref={mainRef} tabIndex={-1}>
@@ -926,6 +966,49 @@ export default function App() {
           </footer>
         </main>
       )}
+      <div
+        className="submission-notifications"
+        aria-label="Submission notifications"
+      >
+        {submissions.map((item) => (
+          <div
+            key={item.id}
+            className={`notice submission-notification ${item.status === "error" ? "danger" : item.status === "success" ? "success" : "neutral"}`}
+          >
+            {item.status === "success" ? (
+              <CheckCircle2 size={18} />
+            ) : item.status === "error" ? (
+              <TriangleAlert size={18} />
+            ) : (
+              <Clock3 size={18} />
+            )}
+            <span role={item.status === "error" ? "alert" : "status"}>
+              {item.message}
+            </span>
+            {item.status === "error" ? (
+              <button
+                className="button small"
+                onClick={() => void runSubmission(item.id, item.send)}
+              >
+                Retry submission
+              </button>
+            ) : null}
+            {item.status !== "pending" ? (
+              <button
+                className="icon-button"
+                aria-label="Dismiss submission notification"
+                onClick={() =>
+                  setSubmissions((items) =>
+                    items.filter((entry) => entry.id !== item.id),
+                  )
+                }
+              >
+                <X size={16} />
+              </button>
+            ) : null}
+          </div>
+        ))}
+      </div>
       <AttachmentPreview preview={preview} onClose={closePreview} />
       <ConfirmDeleteModal
         isOpen={Boolean(requestToDelete)}
