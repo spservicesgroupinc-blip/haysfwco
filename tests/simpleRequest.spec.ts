@@ -63,6 +63,7 @@ interface MockApi {
   transitions: { status: string; id: string; expectedRevision: number }[];
   /** Arm this to make the next attachment upload answer with an error. */
   failNextUpload: boolean;
+  holdNextAction?: { action: string; wait: Promise<void> };
 }
 
 async function installMockApi(
@@ -124,6 +125,11 @@ async function installMockApi(
       action = String(body.action ?? action);
     }
     api.actions.push(action);
+    if (api.holdNextAction?.action === action) {
+      const hold = api.holdNextAction;
+      api.holdNextAction = undefined;
+      await hold.wait;
+    }
     const respond = (obj: unknown) =>
       route.fulfill({
         status: 200,
@@ -223,6 +229,159 @@ async function pickCustomer(page: Page, customer: string) {
     .click();
 }
 
+test("submission returns home before saving and notifies on the current screen after confirmation", async ({
+  page,
+}) => {
+  const api = await installMockApi(page);
+  let release!: () => void;
+  api.holdNextAction = {
+    action: "saveRequest",
+    wait: new Promise<void>((resolve) => {
+      release = resolve;
+    }),
+  };
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
+  await pickCustomer(page, "York Ridge Apartments");
+  await page
+    .getByLabel("What changed?", { exact: true })
+    .fill("Replace flooring");
+  await page
+    .getByRole("button", { name: "Send to estimating", exact: true })
+    .click();
+  try {
+    await expect(
+      page.getByRole("heading", { name: "Change orders", exact: true }),
+    ).toBeVisible({ timeout: 1500 });
+    expect(new URL(page.url()).hash).toBe("#/review");
+    await expect(page.getByText(/Sent to estimating/)).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "New request", exact: true })
+      .click();
+    await page
+      .getByLabel("What changed?", { exact: true })
+      .fill("Next request still in progress");
+  } finally {
+    release();
+  }
+  await expect(page.locator(".submission-notification.success")).toContainText(
+    "Sent to estimating: York Ridge Apartments",
+  );
+  expect(new URL(page.url()).hash).toBe("#/simple");
+  await expect(page.getByLabel("What changed?", { exact: true })).toHaveValue(
+    "Next request still in progress",
+  );
+  expect(api.saved).toHaveLength(1);
+  expect(errors).toEqual([]);
+});
+
+for (const action of ["uploadAttachment", "sendEmail"]) {
+  test(`submission stays responsive while waiting for ${action}`, async ({
+    page,
+  }, testInfo) => {
+    const api = await installMockApi(page);
+    let release!: () => void;
+    api.holdNextAction = {
+      action,
+      wait: new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+    };
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: "New request", exact: true })
+      .click();
+    await pickCustomer(page, "Maple Court Duplex");
+    await page
+      .getByLabel("What changed?", { exact: true })
+      .fill("Replace siding");
+    if (action === "uploadAttachment") {
+      await page
+        .locator('input[type="file"][accept^="image/jpeg"]')
+        .setInputFiles(resolve("tmp/fixtures/photo-800x600.png"));
+    } else {
+      await page.getByLabel("Recipient email address").fill("qa@example.com");
+    }
+    await page
+      .locator(
+        action === "sendEmail"
+          ? ".email-input-group button"
+          : ".sr-submit-button",
+      )
+      .click();
+    try {
+      await expect(
+        page.getByRole("heading", { name: "Change orders", exact: true }),
+      ).toBeVisible();
+      await expect.poll(() => api.actions.includes(action)).toBe(true);
+      await expect(
+        page.locator(".submission-notification.neutral"),
+      ).toContainText("Submitting");
+      await expect(
+        page.locator(".submission-notification.success"),
+      ).toHaveCount(0);
+    } finally {
+      release();
+    }
+    const popup = page.locator(".submission-notification.success");
+    await expect(popup).toContainText("Sent to estimating");
+    for (const width of [320, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      const bounds = await popup.boundingBox();
+      expect(bounds!.x).toBeGreaterThanOrEqual(0);
+      expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({
+      path: testInfo.outputPath("submission-popup.png"),
+    });
+    await page
+      .getByRole("button", { name: "Dismiss submission notification" })
+      .focus();
+    await page.keyboard.press("Enter");
+    await expect(popup).toHaveCount(0);
+    expect(api.saved[0].job.customer).toBe("Maple Court Duplex");
+  });
+}
+
+test("a network failure shows a retry notification instead of reporting backend success", async ({
+  page,
+}) => {
+  const api = await installMockApi(page);
+  const attempts: Record<string, any>[] = [];
+  await page.route(apiRoute, async (route) => {
+    const body = JSON.parse(route.request().postData() ?? "{}");
+    if (body.action === "saveRequest") {
+      attempts.push(body);
+      if (attempts.length === 1) return route.abort("failed");
+    }
+    return route.fallback();
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
+  await pickCustomer(page, "Maple Court Duplex");
+  await page
+    .getByLabel("What changed?", { exact: true })
+    .fill("Replace siding");
+  await page
+    .getByRole("button", { name: "Send to estimating", exact: true })
+    .click();
+  await expect(page.locator(".submission-notification.danger")).toContainText(
+    "Submission could not be completed",
+  );
+  await expect(page.locator(".submission-notification.success")).toHaveCount(0);
+  await page.getByRole("button", { name: "Retry submission" }).dblclick();
+  await expect(page.locator(".submission-notification.success")).toContainText(
+    "Sent to estimating",
+  );
+  expect(attempts).toHaveLength(2);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(api.saved).toHaveLength(1);
+});
+
 for (const [sign, button] of [
   ["+", "Plus — increase"],
   ["-", "Minus — deduction"],
@@ -234,7 +393,9 @@ for (const [sign, button] of [
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));
     await page.goto("/");
-    await page.getByRole("button", { name: "Quick request", exact: true }).click();
+    await page
+      .getByRole("button", { name: "New request", exact: true })
+      .click();
     await pickCustomer(page, "York Ridge Apartments");
     await page
       .getByLabel("What changed?", { exact: true })
@@ -261,7 +422,13 @@ for (const [sign, button] of [
     });
     await page.getByLabel("Recipient email address").fill("review@example.com");
     if (sign === "+")
-      await page.locator(".email-input-group").getByRole("button", { name: "Send email & submit to estimating", exact: true }).click();
+      await page
+        .locator(".email-input-group")
+        .getByRole("button", {
+          name: "Send email & submit to estimating",
+          exact: true,
+        })
+        .click();
     else await page.locator(".sr-submit-button").click();
     await expect(page.getByText(/Sent to estimating/)).toBeVisible();
     expect(api.saved[0].knownChangeAmount).toBe(`${sign}1250.19`);
@@ -276,7 +443,7 @@ test("invalid known amounts block saving, and clearing the amount leaves it opti
 }) => {
   const api = await installMockApi(page);
   await page.goto("/");
-  await page.getByRole("button", { name: "Quick request", exact: true }).click();
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await pickCustomer(page, "York Ridge Apartments");
   await page
     .getByLabel("What changed?", { exact: true })
@@ -299,7 +466,7 @@ test("invalid known amounts block saving, and clearing the amount leaves it opti
   expect(api.saved[0].knownChangeAmount).toBeUndefined();
 });
 
-test("the quick request tab opens from the header and survives a reload", async ({
+test("the quick request tab opens from the header and reload returns home", async ({
   page,
 }) => {
   await installMockApi(page);
@@ -314,7 +481,7 @@ test("the quick request tab opens from the header and survives a reload", async 
 
   await page.reload();
   await expect(
-    page.getByRole("heading", { name: "Quick request", exact: true }),
+    page.getByRole("heading", { name: "Change orders", exact: true }),
   ).toBeVisible();
 });
 
@@ -334,7 +501,8 @@ test("voice input degrades to typing when the browser has no speech API", async 
       configurable: true,
     });
   });
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Quick request", exact: true }),
   ).toBeVisible();
@@ -374,7 +542,8 @@ test("a spoken note is appended to whatever the PM already typed", async ({
     (window as unknown as { SpeechRecognition: unknown }).SpeechRecognition =
       FakeRecognition;
   });
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   const note = page.getByLabel("What changed?", { exact: true });
   await note.fill("Kitchen wall");
   await page.getByRole("button", { name: "Speak the note" }).click();
@@ -393,7 +562,8 @@ test("an empty quick request is refused with a specific reason", async ({
   page,
 }) => {
   const api = await installMockApi(page);
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await page.getByRole("button", { name: "Send to estimating" }).click();
   await expect(
     page.getByText("Type a customer or pick a job from the list."),
@@ -409,7 +579,8 @@ test("an empty quick request is refused with a specific reason", async ({
 
 test("a project manager sends a text-only quick request", async ({ page }) => {
   const api = await installMockApi(page);
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await pickCustomer(page, "York Ridge Apartments");
   await expect(page.locator(".sr-summary")).toContainText("F-26-0366-P");
   await page
@@ -419,7 +590,7 @@ test("a project manager sends a text-only quick request", async ({ page }) => {
 
   // Back on the dashboard with the confirmation the quick form handed over.
   await expect(page.getByText(/Sent to estimating/)).toBeVisible();
-  expect(new URL(page.url()).hash).toBe("#/");
+  expect(new URL(page.url()).hash).toBe("#/review");
   await expect(page.locator(".request-row")).toContainText(
     "York Ridge Apartments",
   );
@@ -463,7 +634,8 @@ test("checkbox answers are copied for Dash before submission and saved with the 
     }),
   );
   const api = await installMockApi(page);
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await pickCustomer(page, "York Ridge Apartments");
   await page
     .getByRole("checkbox", { name: "Change order", exact: true })
@@ -499,7 +671,9 @@ test("checkbox answers are copied for Dash before submission and saved with the 
   await page
     .getByRole("button", { name: "Copy Dash note", exact: true })
     .click();
-  await expect(page.getByRole("status")).toContainText("Copied");
+  await expect(
+    page.getByRole("status").filter({ hasText: "Copied" }),
+  ).toBeVisible();
   expect(api.saved).toHaveLength(0);
   expect(copied).toHaveLength(1);
   for (const expected of [
@@ -523,7 +697,8 @@ test("a photo is marked up before it is sent, with an optional PDF", async ({
   page,
 }) => {
   const api = await installMockApi(page);
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await pickCustomer(page, "York Ridge Apartments");
   await page
     .locator('input[type="file"][accept^="image/jpeg"]')
@@ -597,7 +772,8 @@ test("the annotator keeps a labelled Save control on a phone", async ({
   // way to keep the marks.
   await page.setViewportSize({ width: 390, height: 844 });
   await installMockApi(page);
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await pickCustomer(page, "York Ridge Apartments");
   await page
     .locator('input[type="file"][accept^="image/jpeg"]')
@@ -639,7 +815,8 @@ test("a photo the endpoint cannot accept (HEIC pick) is converted before upload"
   page,
 }) => {
   const api = await installMockApi(page);
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await pickCustomer(page, "York Ridge Apartments");
   // A library pick that still arrives as HEIC: the form is handed image/heic,
   // which the Apps Script endpoint rejects outright ("Choose a supported file
@@ -671,7 +848,8 @@ test("the customer field falls back to a typed name when the directory is empty"
   page,
 }) => {
   await installMockApi(page, []);
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await expect(page.locator(".sr-matches")).toHaveCount(0);
   await page.getByLabel("Customer / project owner").fill("Walk-in customer");
   await page
@@ -687,7 +865,8 @@ test("a failed upload is retried on the same request, never a duplicate", async 
   page,
 }) => {
   const api = await installMockApi(page);
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   await pickCustomer(page, "Maple Court Duplex");
   await page
     .getByLabel("What changed?", { exact: true })
@@ -699,18 +878,17 @@ test("a failed upload is retried on the same request, never a duplicate", async 
 
   api.failNextUpload = true;
   await page.getByRole("button", { name: "Send to estimating" }).click();
-  await expect(page.getByText("Upload failed. Try again.")).toBeVisible();
+  await expect(page.getByText(/Upload failed. Try again./)).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Send to estimating" }),
-  ).toBeEnabled();
-
-  await page.getByRole("button", { name: "Send to estimating" }).click();
+    page.getByRole("heading", { name: "Change orders", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Retry submission" }).click();
   await expect(page.getByText(/Sent to estimating/)).toBeVisible();
 
-  // The retry saved the same request again instead of creating a second one.
-  expect(api.saved).toHaveLength(3);
+  // The retry resumes uploads without repeating the confirmed initial save.
+  expect(api.saved).toHaveLength(2);
   expect(new Set(api.saved.map((request) => request.id)).size).toBe(1);
-  expect(api.saved[2].attachments).toHaveLength(1);
+  expect(api.saved[1].attachments).toHaveLength(1);
   expect(api.transitions).toHaveLength(0);
   // The failed attempt's upload identity is reused, so the endpoint returns the
   // file it already holds instead of storing a second copy of the photo.
@@ -723,7 +901,8 @@ test("typing finds the customer instead of scrolling a long list", async ({
   page,
 }) => {
   const api = await installMockApi(page);
-  await page.goto("/#/simple");
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
   const field = page.getByLabel("Customer / job", { exact: true });
 
   // Part of a name or a job number both find the row — and only that row.

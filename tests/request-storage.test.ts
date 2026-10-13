@@ -19,6 +19,57 @@ import {
   ApiError,
 } from "../src/services/storage";
 import type { ChangeRequest, JobEntry } from "../src/types";
+import { createRequestSubmission } from "../src/services/requestSubmission";
+
+for (const lostSave of [1, 2]) {
+  test(`background submission retries a lost save response at step ${lostSave} without duplicating backend data`, async () => {
+    const backend = mockBackend();
+    const restore = backend.installFetch();
+    const backendFetch = globalThis.fetch;
+    let saves = 0;
+    let preparations = 0;
+    globalThis.fetch = async (input, init) => {
+      const response = await backendFetch(input, init);
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      if (body.action === "saveRequest" && ++saves === lostSave) {
+        throw new TypeError("Connection lost after save");
+      }
+      return response;
+    };
+    try {
+      const request = intakeRequest();
+      const send = createRequestSubmission(
+        request,
+        [
+          {
+            prepare: async () => {
+              preparations += 1;
+              const data = "%PDF-1.4\\nquote";
+              return {
+                name: "quote.pdf",
+                mimeType: "application/pdf",
+                kind: "document",
+                size: Buffer.byteLength(data),
+                data: Buffer.from(data).toString("base64"),
+              };
+            },
+          },
+        ],
+        "",
+      );
+      await assert.rejects(send(), /Connection lost after save/);
+      assert.match(await send(), /Sent to estimating: Sample Customer/);
+      const saved = await openRequest(request.id);
+      assert.equal(saved.revision, 2);
+      assert.equal(saved.attachments.length, 1);
+      assert.equal((await listRequests()).length, 1);
+      assert.equal(backend.files.size, 3); // Two request snapshots and one upload.
+      assert.equal(preparations, 1);
+    } finally {
+      restore();
+    }
+  });
+}
 
 function intakeRequest(): ChangeRequest {
   const request = createRequest();

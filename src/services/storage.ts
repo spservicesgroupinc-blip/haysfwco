@@ -496,23 +496,7 @@ async function post<T>(body: Record<string, unknown>): Promise<T> {
       saveLocalJobs(body.jobs as JobEntry[]);
       return { ok: true, jobs: body.jobs } as unknown as T;
     }
-    if (body.action === "saveRequest" && body.request) {
-      const incoming = body.request as ChangeRequest;
-      const requests = getLocalRequests();
-      const existingIdx = requests.findIndex((r) => r.id === incoming.id);
-      const now = new Date().toISOString();
-      if (existingIdx >= 0) {
-        const updated = { ...incoming, revision: (requests[existingIdx].revision || 0) + 1, updatedAt: now };
-        requests[existingIdx] = updated;
-        saveLocalRequests(requests);
-        return { ok: true, request: updated } as unknown as T;
-      } else {
-        const created = { ...incoming, revision: 1, createdAt: now, updatedAt: now };
-        requests.unshift(created);
-        saveLocalRequests(requests);
-        return { ok: true, request: created } as unknown as T;
-      }
-    }
+    // A local copy cannot confirm a save to the shared backend.
     throw error;
   }
 }
