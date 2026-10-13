@@ -291,6 +291,10 @@ function shapeCheck_(request) {
     if (!final || typeof final !== "object" || typeof final.scope !== "string" || typeof final.amount !== "string") problem_("VALIDATION", "Final scope and amount must be text.");
     if (final.amount.trim() && !/^[+-]?\d+(?:\.\d{1,2})?$/.test(final.amount.trim())) problem_("VALIDATION", "Enter a valid final change dollar amount.");
   }
+  if (request.customerDocument !== undefined) {
+    const doc = request.customerDocument;
+    if (!doc || typeof doc !== "object" || typeof doc.attachmentId !== "string" || !doc.attachmentId || doc.attachmentId.length > 100 || typeof doc.inputFingerprint !== "string" || !/^[a-f0-9]{64}$/.test(doc.inputFingerprint) || !Number.isInteger(doc.templateVersion) || doc.templateVersion < 1) problem_("VALIDATION", "Invalid customer document reference.");
+  }
   ["requestedChanges", "attachments"].forEach(function(key) { if (!Array.isArray(request[key])) problem_("VALIDATION", key + " must be a list."); });
   ["estimatorName", "informationQuestion"].forEach(function(key) { if (typeof request[key] !== "string") problem_("VALIDATION", key + " must be text."); });
   const jobKeys = ["customer", "address", "jobNumber", "projectManager", "branchName", "branchAddress", "branchPhone", "branchContact", "carrier", "claim", "orderNumber", "date", "originalContract", "previousChanges", "addedDays"];
@@ -317,6 +321,29 @@ function attachmentFile_(row, attachment) {
   if (!belongs || metadata.requestId !== String(row.values[RC.ID]) || metadata.attachment.id !== attachment.id || metadata.attachment.driveFileId !== attachment.driveFileId) problem_("VALIDATION", "Attachment does not belong to this request.");
   return { file: file, attachment: metadata.attachment };
 }
+function customerDocumentFingerprint_(request, version) {
+  const keys = ["customer", "address", "jobNumber", "branchName", "branchAddress", "branchPhone", "branchContact", "carrier", "claim", "orderNumber", "date", "insuranceRelated", "originalContract", "previousChanges", "addedDays"];
+  const final = request.finalChangeOrder || {};
+  const input = JSON.stringify([version].concat(keys.map(function(key) { return request.job[key] === undefined || request.job[key] === null ? "" : request.job[key]; }), [final.scope || "", final.amount || ""]));
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, input, Utilities.Charset.UTF_8).map(function(byte) { return (byte & 255).toString(16).padStart(2, "0"); }).join("");
+}
+function reconcileCustomerDocument_(request, previous) {
+  const old = previous && previous.customerDocument;
+  let doc = request.customerDocument;
+  if (old) {
+    const same = doc && doc.attachmentId === old.attachmentId;
+    const linked = request.attachments.some(function(file) { return file.id === old.attachmentId; });
+    const changed = customerDocumentFingerprint_(request, old.templateVersion) !== old.inputFingerprint;
+    if (same && (changed || !linked)) { delete request.customerDocument; doc = null; }
+    if (!doc || doc.attachmentId !== old.attachmentId) request.attachments = request.attachments.filter(function(file) { return file.id !== old.attachmentId; });
+  }
+  if (!doc) return;
+  const file = request.attachments.filter(function(item) { return item.id === doc.attachmentId; })[0];
+  if (!file || file.kind !== "document" || file.mimeType !== "application/pdf" || doc.inputFingerprint !== customerDocumentFingerprint_(request, doc.templateVersion)) problem_("VALIDATION", "The customer PDF does not match this request. Generate it again.");
+  const job = request.job; const final = request.finalChangeOrder || {};
+  [job.customer, job.address, job.jobNumber, job.orderNumber, job.date, job.originalContract, final.scope, final.amount].forEach(function(value) { if (typeof value !== "string" || !value.trim()) problem_("VALIDATION", "Complete the required customer document fields before generating the PDF."); });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(job.date) || isNaN(Date.parse(job.date)) || new Date(job.date).toISOString().slice(0, 10) !== job.date || !/^\d+$/.test(job.addedDays.trim()) || typeof job.insuranceRelated !== "boolean") problem_("VALIDATION", "Enter a valid date, added days, and insurance selection.");
+}
 function saveRequest_(body) {
   checkMutation_(body); shapeCheck_(body.request);
   return locked_(function() {
@@ -324,6 +351,7 @@ function saveRequest_(body) {
     if (sameMutation_(snapshot, body.mutationId)) return json_({ ok: true, request: snapshot.request });
     revisionCheck_(row, body.expectedRevision);
     if (!row) {
+      if (request.customerDocument) problem_("VALIDATION", "Save the request before attaching a customer PDF.");
       if (request.status !== "submitted" || request.estimatorName || request.attachments.length) problem_("VALIDATION", "New requests must begin as submitted without attachments.");
       request.submittedAt = new Date().toISOString(); request.informationQuestion = "";
     } else {
@@ -332,6 +360,7 @@ function saveRequest_(body) {
       if (request.status !== previous.status || request.estimatorName !== previous.estimatorName) problem_("STATE", "Use the claim or status action to change review state.");
       request.submittedAt = previous.submittedAt; request.informationQuestion = previous.informationQuestion;
       request.attachments = request.attachments.map(function(attachment) { return attachmentFile_(row, attachment).attachment; });
+      reconcileCustomerDocument_(request, previous);
     }
     return commitRequest_(request, row, snapshot, body.mutationId);
   });
