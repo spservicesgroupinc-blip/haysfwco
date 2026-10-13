@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { lazy, Suspense, useState } from "react";
 import {
   AlertCircle,
   CheckCircle2,
@@ -19,6 +19,8 @@ import ConfirmDeleteModal from "./ConfirmDeleteModal";
 import { formatDashNote } from "../services/dashNote";
 import { sendRequestEmail } from "../services/storage";
 import "./RequestReview.css";
+import "./CustomerDocument.css";
+const CustomerDocumentEditor = lazy(() => import("./CustomerDocumentEditor"));
 
 export default function RequestReview({
   request,
@@ -57,6 +59,7 @@ export default function RequestReview({
   const [asking, setAsking] = useState(false);
   const [response, setResponse] = useState("");
   const [editing, setEditing] = useState(false);
+  const [preparingDocument, setPreparingDocument] = useState(false);
   const [emailAddress, setEmailAddress] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
   const [emailSuccess, setEmailSuccess] = useState("");
@@ -138,6 +141,56 @@ export default function RequestReview({
         ) : null}
       </div>
 
+      <section
+        className="customer-document-card"
+        aria-label="Customer change order"
+      >
+        <h2>Customer change order</h2>
+        <p>
+          {request.customerDocument
+            ? "The customer PDF is saved with this request."
+            : "Prepare the customer form with job details, agreed scope, and the final contract amount."}
+        </p>
+        <div className="button-row">
+          {request.status !== "completed" ? (
+            <button
+              className="button primary"
+              disabled={editing || Boolean(busy)}
+              onClick={() => setPreparingDocument(true)}
+            >
+              Prepare change order
+            </button>
+          ) : null}
+          <button
+            className="button"
+            disabled={editing || Boolean(busy) || !request.customerDocument}
+            onClick={() => {
+              const file = request.attachments.find(
+                (item) => item.id === request.customerDocument?.attachmentId,
+              );
+              if (file) onPreview(file);
+            }}
+          >
+            View saved PDF
+          </button>
+          <button
+            className="button"
+            disabled={editing || Boolean(busy) || !request.customerDocument}
+            onClick={() => {
+              const file = request.attachments.find(
+                (item) => item.id === request.customerDocument?.attachmentId,
+              );
+              if (file) onDownload(file);
+            }}
+          >
+            Download saved PDF
+          </button>
+        </div>
+        {request.status === "completed" && !request.customerDocument ? (
+          <p>No customer change-order PDF has been generated.</p>
+        ) : null}
+      </section>
+
       <section className="review-card email-card">
         <div className="email-card-header">
           <div className="email-card-title">
@@ -157,7 +210,8 @@ export default function RequestReview({
           )}
         </div>
         <p className="email-card-desc">
-          Enter an email address to send the change order details, requested changes, and all attachments via Google Apps Script.
+          Enter an email address to send the change order details, requested
+          changes, and all attachments via Google Apps Script.
         </p>
         <form
           className="email-form"
@@ -264,14 +318,22 @@ export default function RequestReview({
         />
       ) : (
         <IntakeReceipt
-          request={request}
+          request={{
+            ...request,
+            attachments: request.attachments.filter(
+              (file) => file.id !== request.customerDocument?.attachmentId,
+            ),
+          }}
           busy={busy}
           onPreview={onPreview}
           onDownload={onDownload}
         />
       )}
 
-      <fieldset className="review-workflow" disabled={editing || Boolean(busy)}>
+      <fieldset
+        className="review-workflow"
+        disabled={editing || preparingDocument || Boolean(busy)}
+      >
         {request.status === "submitted" ? (
           <div className="review-card">
             <div className="review-card-icon">
@@ -402,6 +464,17 @@ export default function RequestReview({
         )}
       </fieldset>
 
+      {preparingDocument ? (
+        <Suspense fallback={<p role="status">Opening change order editor…</p>}>
+          <CustomerDocumentEditor
+            request={request}
+            onSaved={onSaved}
+            onReload={onReload}
+            onClose={() => setPreparingDocument(false)}
+            onLeaveGuard={onLeaveGuard}
+          />
+        </Suspense>
+      ) : null}
       <ConfirmDeleteModal
         isOpen={showDeleteConfirm}
         title="Delete change order request?"

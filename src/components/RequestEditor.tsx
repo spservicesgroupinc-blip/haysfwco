@@ -18,6 +18,7 @@ import {
   preparePhotoForUpload,
 } from "../services/photoUpload";
 import { moneyCents } from "../services/contract";
+import { invalidateCustomerDocument } from "../services/customerDocument";
 import {
   pricingInputError,
   finalContractTotal,
@@ -215,7 +216,7 @@ export default function RequestEditor({
           attachments.push(cached.attachment);
         }
         pendingSave.current = {
-          request: { ...draft, attachments },
+          request: await invalidateCustomerDocument({ ...draft, attachments }),
           mutationId: newId(),
         };
       }
@@ -478,7 +479,7 @@ export default function RequestEditor({
           <>
             <h3>Photos &amp; files</h3>
             <ul className="editor-files">
-              {draft.attachments.map((file) => (
+              {draft.attachments.filter((file) => file.id !== draft.customerDocument?.attachmentId).map((file) => (
                 <li key={file.id}>
                   <span>{file.name}</span>
                   <button
