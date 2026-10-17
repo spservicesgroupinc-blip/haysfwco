@@ -257,7 +257,7 @@ function summarizeRequest(r: ChangeRequest): RequestSummary {
 
 // Configured remote Apps Script URL
 export const DEFAULT_APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbxN1Am3RsHbhsRJHpKL20AltkezrrzNJgQiC1U5mFeuvpNTJ3OgFS-vlvlEFC8-1FuR/exec";
+  "https://script.google.com/macros/s/AKfycbzfOdHMBwnGihZI9gvj4M-UkH-oxoR2vhRlrY0QqOYU8tB-MTspqR07aODoBHQy3uhe/exec";
 
 const rawConfiguredUrl = env("VITE_APPS_SCRIPT_URL");
 export const API_URL =

@@ -697,13 +697,16 @@ test("font loading during rapid edits renders the latest draft and preserves key
     release = resolve;
   });
   let blocked = false;
-  await page.route(/NotoSans-Regular\.ttf(?:\?|$)/, async (route) => {
-    if (route.request().resourceType() === "fetch") {
-      blocked = true;
-      await hold;
-    }
-    await route.continue();
-  });
+  await page.route(
+    /NotoSans-Regular(?:-[^/?]+)?\.ttf(?:\?|$)/,
+    async (route) => {
+      if (route.request().resourceType() === "fetch") {
+        blocked = true;
+        await hold;
+      }
+      await route.continue();
+    },
+  );
   await page.goto("/#/requests/r1");
   await page
     .getByRole("button", { name: "Prepare change order", exact: true })
@@ -1049,56 +1052,65 @@ test("individual attachment downloads can be retried after a failure", async ({
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("review and editor fit narrow and wide screens without browser errors", async ({
-  page,
-}) => {
-  const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
-  page.on("console", (message) => {
-    if (message.type() === "error" || message.type() === "warning")
-      errors.push(message.text());
+test.describe("production layout with service worker registration", () => {
+  // This read-only layout test permits registration so Playwright's deliberate
+  // blocking warnings do not count as application console errors. Mutation and
+  // recovery tests keep workers blocked to ensure their API interception works.
+  test.use({ serviceWorkers: "allow" });
+
+  test("review and editor fit narrow and wide screens without browser errors", async ({
+    page,
+  }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("console", (message) => {
+      if (message.type() === "error" || message.type() === "warning")
+        errors.push(message.text());
+    });
+    await installMockApi(page);
+    await page.goto("/#/requests/r1");
+    await expect(
+      page.getByRole("button", { name: "Download summary PDF" }),
+    ).toBeVisible();
+    for (const width of [320, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+    }
+    await page.screenshot({
+      path: "tmp/request-summary/review-desktop.png",
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.screenshot({
+      path: "tmp/request-summary/review-mobile.png",
+      fullPage: true,
+    });
+    await page
+      .getByRole("button", { name: "Edit request", exact: true })
+      .click();
+    for (const width of [320, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 900 });
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth,
+        ),
+      ).toBe(true);
+    }
+    await page.screenshot({
+      path: "tmp/request-summary/editor-desktop.png",
+      fullPage: true,
+    });
+    await page.setViewportSize({ width: 320, height: 900 });
+    await page.screenshot({
+      path: "tmp/request-summary/editor-mobile.png",
+      fullPage: true,
+    });
+    expect(errors).toEqual([]);
   });
-  await installMockApi(page);
-  await page.goto("/#/requests/r1");
-  await expect(
-    page.getByRole("button", { name: "Download summary PDF" }),
-  ).toBeVisible();
-  for (const width of [320, 768, 1024, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    expect(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= window.innerWidth,
-      ),
-    ).toBe(true);
-  }
-  await page.screenshot({
-    path: "tmp/request-summary/review-desktop.png",
-    fullPage: true,
-  });
-  await page.setViewportSize({ width: 320, height: 900 });
-  await page.screenshot({
-    path: "tmp/request-summary/review-mobile.png",
-    fullPage: true,
-  });
-  await page.getByRole("button", { name: "Edit request", exact: true }).click();
-  for (const width of [320, 768, 1024, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    expect(
-      await page.evaluate(
-        () => document.documentElement.scrollWidth <= window.innerWidth,
-      ),
-    ).toBe(true);
-  }
-  await page.screenshot({
-    path: "tmp/request-summary/editor-desktop.png",
-    fullPage: true,
-  });
-  await page.setViewportSize({ width: 320, height: 900 });
-  await page.screenshot({
-    path: "tmp/request-summary/editor-mobile.png",
-    fullPage: true,
-  });
-  expect(errors).toEqual([]);
 });
 
 test("estimators copy saved answers and text, including after corrections", async ({

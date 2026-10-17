@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ChangeRequest } from "../types";
 import type { Workspace } from "../workspaces/types";
 import {
@@ -20,6 +20,7 @@ export default function RequestWorkspaceLink({
   onOpen: (id: string) => void;
   onSaved: (request: ChangeRequest) => void;
 }) {
+  const selectId = useId();
   const [jobs, setJobs] = useState<Workspace[]>([]);
   const [expanded, setExpanded] = useState(false);
   const [choice, setChoice] = useState("");
@@ -132,9 +133,10 @@ export default function RequestWorkspaceLink({
             Link this request to a shared job. Its saved customer details,
             scope, price, and PDFs stay as they are.
           </p>
-          <label className="workspace-directory-select">
-            Shared job
+          <div className="workspace-directory-select">
+            <label htmlFor={selectId}>Shared job</label>
             <select
+              id={selectId}
               value={choice}
               disabled={busy}
               onChange={(event) => {
@@ -155,7 +157,7 @@ export default function RequestWorkspaceLink({
                 </option>
               ))}
             </select>
-          </label>
+          </div>
           <button
             className="button primary"
             disabled={!choice || busy}

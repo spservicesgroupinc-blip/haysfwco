@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { FileText, Plus, Search, Upload } from "lucide-react";
 import type { ChangeRequest, JobEntry, RequestSummary } from "../types";
 import type { WorkspaceRow } from "../workspaces/types";
@@ -38,6 +38,7 @@ export default function JobsDocuments({
   onOpenRequest: (id: string) => void;
   onBack: () => void;
 }) {
+  const directorySelectId = useId();
   const [rows, setRows] = useState<WorkspaceRow[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
@@ -259,9 +260,10 @@ export default function JobsDocuments({
               Choose an imported job to start its workspace. Future directory
               imports preserve your saved details and documents.
             </p>
-            <label className="workspace-directory-select">
-              Directory job
+            <div className="workspace-directory-select">
+              <label htmlFor={directorySelectId}>Directory job</label>
               <select
+                id={directorySelectId}
                 value=""
                 disabled={busy}
                 onChange={(event) => {
@@ -280,7 +282,7 @@ export default function JobsDocuments({
                     </option>
                   ))}
               </select>
-            </label>
+            </div>
             {!jobs.length && (
               <p>
                 No directory jobs imported yet. You can create a job manually.

@@ -1,6 +1,9 @@
-- [ ] Permanent workspace model, backend and durable local outbox
-- [ ] Isolated document templates, forms, intake, editable previews and packets
-- [ ] Jobs navigation, request prefilling and related request/document views
-- [ ] Repeatable generator export/import with explicit conflict decisions
-- [ ] Unit, backend, PDF, production build and real browser verification
-- [ ] Deploy backend, verify preview, then production where credentials permit
+- [x] Permanent workspace model, backend and durable local outbox
+- [x] Isolated document templates, forms, intake, editable previews and packets
+- [x] Jobs navigation, request prefilling and related request/document views
+- [x] Repeatable generator export/import with explicit conflict decisions
+- [x] Unit, backend, PDF, production build and real browser verification (105 unit/backend tests; 61 browser scenarios; 2 source-export tests)
+- [x] Verify user-supplied combined backend read actions and connect the frontend
+- [x] Publish frontend preview (Vercel Ready, October 17)
+- [ ] Complete live save/upload/intake testing
+- [ ] Validate installed mobile PWA and update production after preview acceptance

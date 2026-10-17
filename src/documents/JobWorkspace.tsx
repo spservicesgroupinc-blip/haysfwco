@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import JSZip from "jszip";
 import {
   Download,
@@ -93,6 +93,7 @@ export default function JobWorkspace({
   onOpenRequest: (id: string) => void;
   onBack: () => void;
 }) {
+  const packetSelectId = useId();
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const current = useRef<Workspace | null>(null);
   const [row, setRow] = useState<WorkspaceRow>();
@@ -120,7 +121,7 @@ export default function JobWorkspace({
 
   useEffect(() => {
     if (preview && !previewEntry.current) {
-      window.history.pushState(null, '', window.location.hash);
+      window.history.pushState(null, "", window.location.hash);
       previewEntry.current = true;
     }
   }, [!!preview]);
@@ -133,8 +134,8 @@ export default function JobWorkspace({
       setPreview(null);
       setRegenerating(false);
     };
-    window.addEventListener('popstate', pop);
-    return () => window.removeEventListener('popstate', pop);
+    window.addEventListener("popstate", pop);
+    return () => window.removeEventListener("popstate", pop);
   }, []);
 
   const closePreview = () => {
@@ -344,8 +345,15 @@ export default function JobWorkspace({
     const co = await selectedChangeOrder();
     const bytes = await generateCompletePacket(frozen.record, co);
     if (save) {
-      await queueJobDocument(frozen, 'packet', buildCombinedPacketFileName(frozen.record), bytes);
-      setNotice('Packet saved on this device. Upload to the shared job is queued.');
+      await queueJobDocument(
+        frozen,
+        "packet",
+        buildCombinedPacketFileName(frozen.record),
+        bytes,
+      );
+      setNotice(
+        "Packet saved on this device. Upload to the shared job is queued.",
+      );
       return;
     }
     if (!zip) {
@@ -792,14 +800,24 @@ export default function JobWorkspace({
                 >
                   Download ZIP
                 </button>
-                <button className="button" disabled={!!busy || deviceSaving} onClick={() => void action('Saving packet…', () => packet(false, true))}>
-                  <Save size={16} />Save packet to job
+                <button
+                  className="button"
+                  disabled={!!busy || deviceSaving}
+                  onClick={() =>
+                    void action("Saving packet…", () => packet(false, true))
+                  }
+                >
+                  <Save size={16} />
+                  Save packet to job
                 </button>
               </div>
             </div>
-            <label className="workspace-co-select">
-              Change order to include in packet
+            <div className="workspace-co-select">
+              <label htmlFor={packetSelectId}>
+                Change order to include in packet
+              </label>
               <select
+                id={packetSelectId}
                 value={selectedCo}
                 onChange={(event) => setSelectedCo(event.target.value)}
               >
@@ -811,7 +829,7 @@ export default function JobWorkspace({
                   </option>
                 ))}
               </select>
-            </label>
+            </div>
             <div className="workspace-document-grid">
               {JOB_DOCUMENTS.map((template) => (
                 <article className="workspace-document-card" key={template.id}>
