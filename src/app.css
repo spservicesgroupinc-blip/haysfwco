@@ -512,3 +512,4 @@
 .submission-notification.neutral {
   color: #303b49;
 }
+.workspace-request-link{max-width:1040px;margin:16px auto;padding:0 16px}.workspace-request-link .button{margin-top:10px}.workspace-sync-global{padding:8px 20px;background:#fff8eb;font-size:12px;display:flex;gap:12px;align-items:center;justify-content:center}.workspace-sync-global button{min-height:34px}

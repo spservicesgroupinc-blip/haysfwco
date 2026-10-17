@@ -1,0 +1,84 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  createWorkspace,
+  workspaceFromDirectory,
+  requestFromWorkspace,
+  updateRecordField,
+  recalculateFinancials,
+} from "../src/workspaces/model";
+import { createRequest } from "../src/services/requests";
+
+test("job workspaces keep RCV separate from the original contract and preserve explicit zero", () => {
+  const workspace = createWorkspace();
+  workspace.record.financials.totalApprovedRcv = 5000;
+  workspace.originalContract = "0.00";
+  workspace.previousChanges = "-25.19";
+  const request = requestFromWorkspace(workspace);
+  assert.equal(request.workspaceId, workspace.id);
+  assert.equal(request.job.originalContract, "0.00");
+  assert.equal(request.job.previousChanges, "-25.19");
+  assert.equal(request.finalChangeOrder, undefined);
+  assert.equal(workspace.record.financials.totalApprovedRcv, 5000);
+});
+
+test("prefilling new requests never rewrites an existing snapshot or estimator corrections", () => {
+  const workspace = createWorkspace();
+  workspace.record.customer.customerName = "Updated job name";
+  const existing = createRequest();
+  existing.job.customer = "Snapshot";
+  existing.finalChangeOrder = { scope: "Corrected scope", amount: "-100.19" };
+  assert.deepEqual(requestFromWorkspace(workspace, existing), existing);
+});
+
+test("replacing a directory row ID does not change a saved workspace identity", () => {
+  const entry = {
+    id: "directory-1",
+    jobNumber: "F-26-1",
+    customer: "Name",
+    address: "Address",
+    projectManager: "PM",
+    estimator: "Estimator",
+    status: "Active",
+    customerPhone: "555",
+    customerEmail: "email@example.test",
+    contractAmount: "123.45",
+    active: true,
+    updatedAt: "",
+  };
+  const workspace = workspaceFromDirectory(entry);
+  assert.notEqual(workspace.id, entry.id);
+  assert.equal(workspace.originalContract, "123.45");
+  assert.equal(workspace.record.financials.totalApprovedRcv, "");
+  assert.equal(requestFromWorkspace(workspace).job.customerPhone, "555");
+});
+
+test("PDF field edits reject unrelated paths and preserve checkbox and numeric values", () => {
+  const workspace = createWorkspace();
+  assert.throws(() =>
+    updateRecordField(workspace.record, "__proto__.polluted", "yes"),
+  );
+  const changed = updateRecordField(
+    workspace.record,
+    "financials.totalApprovedRcv",
+    "0",
+  );
+  assert.equal(changed.financials.totalApprovedRcv, 0);
+  assert.equal(workspace.record.financials.totalApprovedRcv, "");
+});
+
+test("agreement payments split approved RCV while net claim subtracts the deductible", () => {
+  const workspace = createWorkspace();
+  workspace.record.financials.totalApprovedRcv = 10000.03;
+  workspace.record.financials.deductible = 1000;
+  const financials = recalculateFinancials(workspace.record).financials;
+  assert.equal(financials.netClaimValue, 9000.03);
+  assert.equal(financials.downPayment, 5000.02);
+  assert.equal(financials.midProgressPayment, 2500.01);
+  assert.equal(financials.balancePayment, 2500);
+  workspace.record.financials.totalApprovedRcv = "";
+  assert.equal(
+    recalculateFinancials(workspace.record).financials.downPayment,
+    0,
+  );
+});

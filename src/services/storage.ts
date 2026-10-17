@@ -236,6 +236,7 @@ function saveLocalAttachment(attachmentId: string, item: { name: string; mimeTyp
 
 function summarizeRequest(r: ChangeRequest): RequestSummary {
   return {
+    ...(r.workspaceId ? { workspaceId: r.workspaceId } : {}),
     id: r.id,
     revision: r.revision,
     createdAt: r.createdAt,
@@ -256,7 +257,7 @@ function summarizeRequest(r: ChangeRequest): RequestSummary {
 
 // Configured remote Apps Script URL
 export const DEFAULT_APPS_SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbwQSdaJDrJLko2KEIJnRJpCc2TpGsFE3F-mBhaXw0KxFucS7A5myLd04trcEwTLU8kR/exec";
+  "https://script.google.com/macros/s/AKfycbxN1Am3RsHbhsRJHpKL20AltkezrrzNJgQiC1U5mFeuvpNTJ3OgFS-vlvlEFC8-1FuR/exec";
 
 const rawConfiguredUrl = env("VITE_APPS_SCRIPT_URL");
 export const API_URL =

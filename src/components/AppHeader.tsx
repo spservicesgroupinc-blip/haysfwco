@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, Inbox, ListChecks, Menu, ShieldCheck, X, Zap } from "lucide-react";
+import {
+  ArrowLeft,
+  Inbox,
+  ListChecks,
+  Menu,
+  ShieldCheck,
+  X,
+  Zap,
+} from "lucide-react";
 import type { NavDestination } from "../services/navigation";
 import "./AppHeader.css";
 
@@ -10,12 +18,17 @@ const NAV_ITEMS: {
 }[] = [
   { id: "simple", label: "Quick request", icon: <Zap size={16} /> },
   { id: "review", label: "Estimator review", icon: <Inbox size={16} /> },
+  {
+    id: "workspaces",
+    label: "Jobs & Documents",
+    icon: <ListChecks size={16} />,
+  },
   { id: "jobs", label: "Import jobs", icon: <ListChecks size={16} /> },
 ];
 
 export interface AppHeaderProps {
   /** The section on screen, highlighted in the navigation. */
-  current: NavDestination | "request";
+  current: NavDestination | "request" | "workspace";
   onNavigate: (destination: NavDestination) => void;
   /**
    * The way out of this screen. Sub-pages always show one so a phone user is
@@ -86,7 +99,9 @@ export default function AppHeader({
   }, [menuOpen]);
 
   const isCurrent = (id: NavDestination) =>
-    current === id || (id === "review" && current === "request");
+    current === id ||
+    (id === "review" && current === "request") ||
+    (id === "workspaces" && current === "workspace");
 
   return (
     <header className="app-header" ref={headerRef}>

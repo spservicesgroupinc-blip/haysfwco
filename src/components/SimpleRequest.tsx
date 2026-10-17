@@ -31,6 +31,8 @@ import "./SimpleRequest.css";
 export interface SimpleRequestProps {
   /** The admin-managed customer/job directory. */
   jobs: JobEntry[];
+  /** Fresh request seeded from a permanent job workspace. */
+  initialRequest?: ChangeRequest;
   /** The shell runs the task after returning home and owns its notification. */
   onSubmit: (send: () => Promise<string>) => void;
 }
@@ -117,7 +119,9 @@ function buildRequest(
     "requestType" | "customerCredits" | "knownChangeAmount"
   >,
 ): ChangeRequest {
-  const request = base ?? createRequest();
+  const sameWorkspace =
+    !base?.workspaceId || details.job?.id === `workspace-${base.workspaceId}`;
+  const request = sameWorkspace && base ? base : createRequest();
   const description = details.note.trim();
   return {
     ...request,
@@ -213,10 +217,33 @@ function PhotoTile({
 export default function SimpleRequest(
   props: SimpleRequestProps,
 ): React.ReactElement {
-  const { jobs, onSubmit } = props;
+  const { jobs, onSubmit, initialRequest } = props;
   // Only active directory rows are offered; without any, the page falls back to
   // a typed customer name so it still works.
-  const directoryJobs = jobs.filter((job) => job.active);
+  const seededJob: JobEntry | undefined = initialRequest?.workspaceId
+    ? {
+        id: `workspace-${initialRequest.workspaceId}`,
+        jobNumber: initialRequest.job.jobNumber,
+        customer: initialRequest.job.customer,
+        address: initialRequest.job.address,
+        projectManager: initialRequest.job.projectManager,
+        estimator: initialRequest.job.branchContact,
+        status: "Active",
+        customerPhone: initialRequest.job.customerPhone || "",
+        customerEmail: initialRequest.job.customerEmail || "",
+        contractAmount: initialRequest.job.originalContract,
+        active: true,
+        updatedAt: initialRequest.updatedAt,
+      }
+    : undefined;
+  const directoryJobs = seededJob
+    ? [
+        seededJob,
+        ...jobs.filter(
+          (job) => job.active && job.jobNumber !== seededJob.jobNumber,
+        ),
+      ]
+    : jobs.filter((job) => job.active);
   const customerId = useId();
   const noteId = useId();
   const amountId = useId();
@@ -225,11 +252,13 @@ export default function SimpleRequest(
   const recognition = useRef<SpeechRecognitionLike | null>(null);
   const submissionStarted = useRef(false);
 
-  const [jobId, setJobId] = useState("");
+  const [jobId, setJobId] = useState(seededJob?.id || "");
   // The customer/job search text. In directory mode it is the type-ahead query
   // and then the chosen job's label; without a directory it is simply the
   // customer's name, so the page still works on a bare device.
-  const [customerText, setCustomerText] = useState("");
+  const [customerText, setCustomerText] = useState(
+    seededJob ? jobLabel(seededJob) : "",
+  );
   const [matchListOpen, setMatchListOpen] = useState(false);
   const [note, setNote] = useState("");
   const [requestType, setRequestType] =
@@ -456,7 +485,7 @@ export default function SimpleRequest(
     if (listening) stopListening();
     submissionStarted.current = true;
     setBusy(true);
-    const request = buildRequest(null, {
+    const request = buildRequest(initialRequest ?? null, {
       job: selectedJob,
       customer,
       note,

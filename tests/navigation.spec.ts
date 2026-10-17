@@ -70,14 +70,25 @@ async function installMockApi(page: Page) {
       directory.push(...((body.jobs as Record<string, unknown>[]) ?? []));
       return respond({ ok: true, jobs: directory });
     }
-    if (action === "openRequest") return respond({ ok: true, request: queuedRequest });
+    if (action === "openRequest")
+      return respond({ ok: true, request: queuedRequest });
     if (action === "claimRequest")
       return respond({
         ok: true,
-        request: { ...queuedRequest, status: "in_review", estimatorName: String(body.estimatorName ?? "") },
+        request: {
+          ...queuedRequest,
+          status: "in_review",
+          estimatorName: String(body.estimatorName ?? ""),
+        },
       });
     if (action === "transitionRequest")
-      return respond({ ok: true, request: { ...queuedRequest, status: String(body.status ?? "submitted") } });
+      return respond({
+        ok: true,
+        request: {
+          ...queuedRequest,
+          status: String(body.status ?? "submitted"),
+        },
+      });
     return respond({ ok: true });
   });
 }
@@ -95,13 +106,17 @@ test("the quick request form opens from the header and the home button", async (
   await page.goto("/");
   await expect(dashboard(page)).toBeVisible();
 
-  await page.getByRole("button", { name: "Quick request", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Quick request", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Quick request", exact: true }),
   ).toBeVisible();
   expect(new URL(page.url()).hash).toBe("#/simple");
 
-  await page.getByRole("button", { name: "Back to requests", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Back to requests", exact: true })
+    .click();
   await expect(dashboard(page)).toBeVisible();
 
   await page.getByRole("button", { name: "New request", exact: true }).click();
@@ -138,7 +153,9 @@ test("the back gesture returns to the request list instead of leaving the app", 
   await page.goto("/");
   await expect(dashboard(page)).toBeVisible();
 
-  await page.getByRole("button", { name: /York Ridge Apartments/ }).click();
+  await page
+    .getByRole("button", { name: /^In queue York Ridge Apartments/ })
+    .click();
   await expect(
     page.getByRole("heading", { name: "In queue", exact: true }),
   ).toBeVisible();
@@ -148,8 +165,14 @@ test("the back gesture returns to the request list instead of leaving the app", 
   await expect(dashboard(page)).toBeVisible();
 });
 
-test("sections survive a reload and the brand returns home", async ({ page }) => {
+test("cold launch opens the dashboard and the brand returns home from a section", async ({
+  page,
+}) => {
   await page.goto("/#/simple");
+  await expect(dashboard(page)).toBeVisible();
+  await page
+    .getByRole("button", { name: "Quick request", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Quick request", exact: true }),
   ).toBeVisible();
@@ -158,7 +181,7 @@ test("sections survive a reload and the brand returns home", async ({ page }) =>
     .getByRole("link", { name: "Hays + Sons change orders home" })
     .click();
   await expect(dashboard(page)).toBeVisible();
-  expect(new URL(page.url()).hash).toBe("#/");
+  expect(new URL(page.url()).hash).toBe("#/review");
 
   await page.reload();
   await expect(dashboard(page)).toBeVisible();
@@ -170,22 +193,34 @@ test("the header switches between Quick request and Estimator review", async ({
   await page.goto("/");
   await expect(dashboard(page)).toBeVisible();
 
-  await page.getByRole("button", { name: "Quick request", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Quick request", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Quick request", exact: true }),
   ).toBeVisible();
   expect(new URL(page.url()).hash).toBe("#/simple");
 
-  await page.getByRole("button", { name: "Estimator review", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Estimator review", exact: true })
+    .click();
   await expect(dashboard(page)).toBeVisible();
   expect(new URL(page.url()).hash).toBe("#/review");
 });
 
-test("the import jobs page opens from the header and is linkable", async ({
+test("the import jobs page opens from the header and cold launch returns home", async ({
   page,
 }) => {
   await page.goto("/#/jobs");
+  await expect(dashboard(page)).toBeVisible();
+  await page.getByRole("button", { name: "Import jobs", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Import jobs for auto-complete", exact: true }),
+    page.getByRole("heading", {
+      name: "Import jobs for auto-complete",
+      exact: true,
+    }),
   ).toBeVisible();
+  expect(new URL(page.url()).hash).toBe("#/jobs");
+  await page.reload();
+  await expect(dashboard(page)).toBeVisible();
 });

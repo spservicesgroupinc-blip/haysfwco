@@ -1,6 +1,8 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import tailwindcss from '@tailwindcss/vite';
+import { createWorkspaceDevApi } from './scripts/workspace-dev-api.ts';
 
 interface MockRequest {
   schemaVersion: 2;
@@ -162,10 +164,12 @@ function localApiPlugin(): Plugin {
     string,
     { name: string; mimeType: string; data: string }
   >();
+  const workspaceApi = createWorkspaceDevApi(requests);
 
   function summarize(r: MockRequest) {
     return {
       id: r.id,
+      workspaceId: r.workspaceId,
       revision: r.revision,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
@@ -213,6 +217,9 @@ function localApiPlugin(): Plugin {
     };
 
     try {
+      const workspaceResult = workspaceApi(action, { ...Object.fromEntries(url.searchParams), ...body });
+      if (workspaceResult !== undefined) return respond(workspaceResult);
+
       if (action === "bootstrap") {
         return respond({
           ok: true,
@@ -367,6 +374,7 @@ function localApiPlugin(): Plugin {
 export default defineConfig({
   plugins: [
     react(),
+    tailwindcss(),
     localApiPlugin(),
     VitePWA({
       registerType: "autoUpdate",
@@ -439,7 +447,7 @@ export default defineConfig({
         ],
       },
       devOptions: {
-        enabled: true,
+        enabled: false,
         type: "module",
       },
     }),

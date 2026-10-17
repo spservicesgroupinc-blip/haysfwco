@@ -1,0 +1,6 @@
+- [ ] Permanent workspace model, backend and durable local outbox
+- [ ] Isolated document templates, forms, intake, editable previews and packets
+- [ ] Jobs navigation, request prefilling and related request/document views
+- [ ] Repeatable generator export/import with explicit conflict decisions
+- [ ] Unit, backend, PDF, production build and real browser verification
+- [ ] Deploy backend, verify preview, then production where credentials permit

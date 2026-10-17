@@ -9,11 +9,13 @@
 export type View =
   | { kind: "review" }
   | { kind: "request"; id: string }
+  | { kind: "workspaces" }
+  | { kind: "workspace"; id: string }
   | { kind: "jobs" }
   | { kind: "simple" };
 
 /** The sections the app header can jump between. */
-export type NavDestination = "simple" | "review" | "jobs";
+export type NavDestination = "simple" | "review" | "jobs" | "workspaces";
 
 export const REVIEW: View = { kind: "review" };
 export const HOME: View = REVIEW;
@@ -23,11 +25,16 @@ const VIEW_KEY = "hays-active-view";
 export function destinationToView(destination: NavDestination): View {
   if (destination === "simple") return { kind: "simple" };
   if (destination === "jobs") return { kind: "jobs" };
+  if (destination === "workspaces") return { kind: "workspaces" };
   return REVIEW;
 }
 
 export function viewToHash(view: View): string {
   switch (view.kind) {
+    case "workspaces":
+      return "#/workspaces";
+    case "workspace":
+      return `#/workspaces/${encodeURIComponent(view.id)}`;
     case "request":
       return `#/requests/${encodeURIComponent(view.id)}`;
     case "simple":
@@ -47,6 +54,10 @@ export function hashToView(hash: string): View | null {
   const parts = raw.split("/").filter(Boolean).map(decodeURIComponent);
   if (!parts.length) return REVIEW;
   switch (parts[0]) {
+    case "workspaces":
+      return parts[1]
+        ? { kind: "workspace", id: parts[1] }
+        : { kind: "workspaces" };
     case "simple":
       return { kind: "simple" };
     case "jobs":
@@ -63,11 +74,15 @@ export function hashToView(hash: string): View | null {
 export function sameView(a: View, b: View): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "request" && b.kind === "request") return a.id === b.id;
+  if (a.kind === "workspace" && b.kind === "workspace") return a.id === b.id;
   return true;
 }
 
 export function viewLabel(view: View): string {
   switch (view.kind) {
+    case "workspaces":
+    case "workspace":
+      return "Jobs & Documents";
     case "request":
       return "Change order review";
     case "simple":
@@ -92,7 +107,11 @@ export function initialView(): View {
   const hash = window.location.hash;
   if (hash.length > 1) {
     const fromHash = hashToView(hash);
-    if (fromHash && fromHash.kind === "request") return fromHash;
+    if (
+      fromHash &&
+      ["request", "workspace", "workspaces"].includes(fromHash.kind)
+    )
+      return fromHash;
   }
   return REVIEW;
 }
@@ -103,6 +122,12 @@ export function readStoredView(): View {
     if (!raw) return REVIEW;
     const parsed = JSON.parse(raw) as Partial<View> & { id?: string };
     switch (parsed.kind) {
+      case "workspace":
+        return parsed.id
+          ? { kind: "workspace", id: String(parsed.id) }
+          : { kind: "workspaces" };
+      case "workspaces":
+        return { kind: "workspaces" };
       case "request":
         return parsed.id ? { kind: "request", id: String(parsed.id) } : REVIEW;
       case "simple":
