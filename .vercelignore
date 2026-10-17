@@ -13,7 +13,9 @@ playwright-report/
 
 # Scripts & temporary files
 tmp/
-scripts/
+scripts/*
+# Vite imports this fixture helper while evaluating its build configuration.
+!scripts/workspace-dev-api.ts
 
 # Environment files
 .env.local

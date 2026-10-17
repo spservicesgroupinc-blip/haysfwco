@@ -4,6 +4,8 @@ import {
   useMemo,
   useRef,
   useState,
+  lazy,
+  Suspense,
   type ReactElement,
 } from "react";
 import {
@@ -61,6 +63,11 @@ import InstallApp from "./components/InstallApp";
 import "./app.css";
 import summaryFontUrl from "./assets/fonts/NotoSans-Regular.ttf?url";
 import { downloadBlob } from "./services/download";
+import WorkspaceSyncStatus from "./components/WorkspaceSyncStatus";
+const JobsDocuments = lazy(() => import("./documents/JobsDocuments"));
+const RequestWorkspaceLink = lazy(
+  () => import("./documents/RequestWorkspaceLink"),
+);
 
 const STATUS_LABELS: Record<RequestStatus, string> = {
   submitted: "In queue",
@@ -195,6 +202,9 @@ export default function App() {
   const activeSubmissions = useRef(new Set<string>());
 
   const [request, setRequest] = useState<ChangeRequest | null>(null);
+  const [newRequestSeed, setNewRequestSeed] = useState<
+    ChangeRequest | undefined
+  >();
   const [saveError, setSaveError] = useState("");
   const [busy, setBusy] = useState("");
   const [preview, setPreview] = useState<{ name: string; blob: Blob } | null>(
@@ -266,7 +276,10 @@ export default function App() {
         previewEntry.current = false;
       }
       // A fresh visit to the quick form clears the last confirmation.
-      if (next.kind === "simple") setHomeNotice("");
+      if (next.kind === "simple") {
+        setHomeNotice("");
+        setNewRequestSeed(undefined);
+      }
       if (next.kind === "review") void refresh();
     },
     [navigateTo, refresh],
@@ -365,7 +378,10 @@ export default function App() {
 
   // A view change is a page change: start at the top and let a screen reader
   // follow the new content instead of silently staying on the old heading.
-  const viewKey = view.kind === "request" ? `request:${view.id}` : view.kind;
+  const viewKey =
+    view.kind === "request" || view.kind === "workspace"
+      ? `${view.kind}:${view.id}`
+      : view.kind;
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0 });
     mainRef.current?.focus({ preventScroll: true });
@@ -676,6 +692,7 @@ export default function App() {
         busy={busy}
       />
       <InstallApp />
+      <WorkspaceSyncStatus />
       {listError ? (
         <div className="storage-error" role="alert">
           <X size={18} />
@@ -689,7 +706,36 @@ export default function App() {
       ) : null}
       {view.kind === "simple" ? (
         <main className="shell-request" ref={mainRef} tabIndex={-1}>
-          <SimpleRequest jobs={jobs} onSubmit={submitQuickRequest} />
+          <SimpleRequest
+            key={newRequestSeed?.id || "new"}
+            jobs={jobs}
+            initialRequest={newRequestSeed}
+            onSubmit={submitQuickRequest}
+          />
+        </main>
+      ) : view.kind === "workspace" || view.kind === "workspaces" ? (
+        <main className="shell-request" ref={mainRef} tabIndex={-1}>
+          <Suspense
+            fallback={
+              <div className="empty">
+                <div className="spinner" />
+                <p>Loading job documents…</p>
+              </div>
+            }
+          >
+            <JobsDocuments
+              workspaceId={view.kind === "workspace" ? view.id : undefined}
+              jobs={jobs}
+              requests={requests}
+              onOpenWorkspace={(id) => goTo({ kind: "workspace", id })}
+              onBack={() => goTo({ kind: "workspaces" })}
+              onOpenRequest={(id) => void openRequestById(id)}
+              onNewRequest={(seed) => {
+                goTo({ kind: "simple" });
+                setNewRequestSeed(seed);
+              }}
+            />
+          </Suspense>
         </main>
       ) : view.kind === "jobs" ? (
         <main className="shell-request" ref={mainRef} tabIndex={-1}>
@@ -710,28 +756,41 @@ export default function App() {
             </div>
           ) : null}
           {request ? (
-            <RequestReview
-              key={request.id}
-              request={request}
-              busy={busy}
-              onBack={goHome}
-              onPreview={(attachment) => void previewAttachment(attachment)}
-              onDownload={(attachment) => void downloadAttachment(attachment)}
-              onClaim={(name) => void claim(name)}
-              onComplete={() => void markComplete()}
-              onRequestInfo={(question) => void requestInfo(question)}
-              onSendResponse={(response) => void sendResponse(response)}
-              onDownloadSummary={() => void downloadSummary()}
-              onSaved={(saved) => {
-                setRequest(saved);
-                setSaveError("");
-                void refresh();
-              }}
-              onReload={() => openRequest(request.id)}
-              onBusy={setBusy}
-              onLeaveGuard={registerLeaveGuard}
-              onDelete={handleDeleteRequest}
-            />
+            <>
+              <Suspense fallback={null}>
+                <RequestWorkspaceLink
+                  key={request.id}
+                  request={request}
+                  onOpen={(id) => goTo({ kind: "workspace", id })}
+                  onSaved={(saved) => {
+                    setRequest(saved);
+                    void refresh();
+                  }}
+                />
+              </Suspense>
+              <RequestReview
+                key={request.id}
+                request={request}
+                busy={busy}
+                onBack={goHome}
+                onPreview={(attachment) => void previewAttachment(attachment)}
+                onDownload={(attachment) => void downloadAttachment(attachment)}
+                onClaim={(name) => void claim(name)}
+                onComplete={() => void markComplete()}
+                onRequestInfo={(question) => void requestInfo(question)}
+                onSendResponse={(response) => void sendResponse(response)}
+                onDownloadSummary={() => void downloadSummary()}
+                onSaved={(saved) => {
+                  setRequest(saved);
+                  setSaveError("");
+                  void refresh();
+                }}
+                onReload={() => openRequest(request.id)}
+                onBusy={setBusy}
+                onLeaveGuard={registerLeaveGuard}
+                onDelete={handleDeleteRequest}
+              />
+            </>
           ) : openError ? (
             <div className="empty">
               <div className="empty-icon">

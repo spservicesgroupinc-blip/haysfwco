@@ -23,6 +23,8 @@ export interface RequestAttachment {
   driveFileId: string;
 }
 export interface ChangeRequest {
+  /** Permanent shared job; request.job remains an independent historical snapshot. */
+  workspaceId?: string;
   schemaVersion: 2;
   requestType?: "change_order" | "insurance_supplement";
   customerCredits?: boolean;
@@ -53,6 +55,7 @@ export interface ChangeRequest {
   jobDirectoryId?: string;
 }
 export interface RequestSummary {
+  workspaceId?: string;
   id: string;
   revision: number;
   createdAt: string;
