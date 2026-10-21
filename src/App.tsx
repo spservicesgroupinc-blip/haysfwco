@@ -61,9 +61,14 @@ import RequestReview from "./components/RequestReview";
 import PdfViewer from "./components/PdfViewer";
 import InstallApp from "./components/InstallApp";
 import "./app.css";
+import "./ux.css";
 import summaryFontUrl from "./assets/fonts/NotoSans-Regular.ttf?url";
 import { downloadBlob } from "./services/download";
 import WorkspaceSyncStatus from "./components/WorkspaceSyncStatus";
+import RequestQueue from "./components/RequestQueue";
+import DraftRecovery from "./components/DraftRecovery";
+import type { RequestDraft } from "./services/requestDrafts";
+import { runDraftSubmission } from "./services/durableSubmission";
 const JobsDocuments = lazy(() => import("./documents/JobsDocuments"));
 const RequestWorkspaceLink = lazy(
   () => import("./documents/RequestWorkspaceLink"),
@@ -205,6 +210,7 @@ export default function App() {
   const [newRequestSeed, setNewRequestSeed] = useState<
     ChangeRequest | undefined
   >();
+  const [requestDraft, setRequestDraft] = useState<RequestDraft>();
   const [saveError, setSaveError] = useState("");
   const [busy, setBusy] = useState("");
   const [preview, setPreview] = useState<{ name: string; blob: Blob } | null>(
@@ -215,6 +221,8 @@ export default function App() {
   >(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const mainRef = useRef<HTMLElement>(null);
+  const queueScroll = useRef(0);
+  const previousView = useRef(view.kind);
   // A preview is pushed onto the history stack so the phone's back gesture
   // closes it. The two flags keep that bookkeeping off the routing path.
   const previewEntry = useRef(false);
@@ -236,6 +244,7 @@ export default function App() {
    */
   const navigateTo = useCallback(
     (next: View, mode: "push" | "replace" = "push") => {
+      if (viewRef.current.kind === "review" && next.kind !== "review") queueScroll.current = window.scrollY;
       viewRef.current = next;
       setViewState(next);
       persistView(next);
@@ -279,6 +288,7 @@ export default function App() {
       if (next.kind === "simple") {
         setHomeNotice("");
         setNewRequestSeed(undefined);
+        setRequestDraft(undefined);
       }
       if (next.kind === "review") void refresh();
     },
@@ -286,7 +296,7 @@ export default function App() {
   );
 
   const navigate = useCallback(
-    (destination: NavDestination) => goTo(destinationToView(destination)),
+    (destination: NavDestination) => { const next=destinationToView(destination); if (!sameView(next,viewRef.current)) goTo(next); },
     [goTo],
   );
 
@@ -383,7 +393,9 @@ export default function App() {
       ? `${view.kind}:${view.id}`
       : view.kind;
   useEffect(() => {
-    window.scrollTo({ top: 0, left: 0 });
+    const returnToQueue = view.kind === "review" && previousView.current !== "review";
+    previousView.current = view.kind;
+    window.scrollTo({ top: returnToQueue ? queueScroll.current : 0, left: 0 });
     mainRef.current?.focus({ preventScroll: true });
   }, [viewKey]);
 
@@ -619,7 +631,7 @@ export default function App() {
   const filteredRequests = requests.filter(
     (item) =>
       (homeStatus === "all" || item.status === homeStatus) &&
-      `${item.job.customer} ${item.job.jobNumber} ${item.job.projectManager}`
+      `${item.job.customer} ${item.job.jobNumber} ${item.job.projectManager} ${item.estimatorName}`
         .toLowerCase()
         .includes(homeSearch.toLowerCase()),
   );
@@ -707,8 +719,10 @@ export default function App() {
       {view.kind === "simple" ? (
         <main className="shell-request" ref={mainRef} tabIndex={-1}>
           <SimpleRequest
-            key={newRequestSeed?.id || "new"}
+            key={requestDraft?.id || newRequestSeed?.id || "new"}
             jobs={jobs}
+            initialDraft={requestDraft}
+            onLeaveGuard={registerLeaveGuard}
             initialRequest={newRequestSeed}
             onSubmit={submitQuickRequest}
           />
@@ -724,6 +738,7 @@ export default function App() {
             }
           >
             <JobsDocuments
+              initialTool={view.kind === "workspaces" ? view.tool : undefined}
               workspaceId={view.kind === "workspace" ? view.id : undefined}
               jobs={jobs}
               requests={requests}
@@ -821,7 +836,7 @@ export default function App() {
         <main className="home shell-home" ref={mainRef} tabIndex={-1}>
           <header className="ops-head">
             <div className="ops-head-text">
-              <h1>Change orders</h1>
+              <h1>Requests</h1>
             </div>
             <div className="ops-head-actions">
               <button
@@ -848,6 +863,24 @@ export default function App() {
             </div>
           ) : null}
 
+          <DraftRecovery
+            onResume={(draft)=>{goTo({kind:"simple"});setRequestDraft(draft);setNewRequestSeed(draft.values.initialRequest);}}
+            onRetry={(draft)=>submitQuickRequest(()=>runDraftSubmission(draft.id))}
+            onOpen={(id)=>void openRequestById(id)}
+          />
+
+          <div className="queue-toolbar">
+                {requests.length ? (
+                  <label className="search">
+                    <Search size={17} />
+                    <input
+                      aria-label="Search requests"
+                      placeholder="Customer, job, or PM…"
+                      value={homeSearch}
+                      onChange={(event) => setHomeSearch(event.target.value)}
+                    />
+                  </label>
+                ) : null}
           <section className="stat-grid" aria-label="Request status overview">
             {STAT_TILES.map(({ key, label, tone, icon }) => {
               const count = key === "all" ? requests.length : statusCounts[key];
@@ -867,6 +900,8 @@ export default function App() {
               );
             })}
           </section>
+
+          </div>
 
           {statusCounts.needs_information > 0 &&
           homeStatus !== "needs_information" ? (
@@ -916,17 +951,7 @@ export default function App() {
                     Clear filter
                   </button>
                 )}
-                {requests.length ? (
-                  <label className="search">
-                    <Search size={17} />
-                    <input
-                      aria-label="Search requests"
-                      placeholder="Customer, job, or PM…"
-                      value={homeSearch}
-                      onChange={(event) => setHomeSearch(event.target.value)}
-                    />
-                  </label>
-                ) : null}
+
               </div>
             </div>
             {!requests.length ? (
@@ -948,75 +973,7 @@ export default function App() {
                 </button>
               </div>
             ) : (
-              <div className="request-list">
-                {filteredRequests.map((item) => (
-                  <div
-                    className="request-row"
-                    key={item.id}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => void openRequestById(item.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        void openRequestById(item.id);
-                      }
-                    }}
-                  >
-                    <span className={`request-status status-${item.status}`}>
-                      {STATUS_LABELS[item.status]}
-                    </span>
-                    <span className="request-row-main">
-                      <strong>{item.job.customer || "Untitled request"}</strong>
-                      <small>
-                        {item.job.jobNumber || "Job pending"} ·{" "}
-                        {item.changesCount}{" "}
-                        {item.changesCount === 1 ? "change" : "changes"}
-                        {item.estimatorName ? ` · ${item.estimatorName}` : ""}
-                      </small>
-                      {item.status === "needs_information" ? (
-                        <span className="request-row-action">
-                          Add the requested information
-                          <ArrowRight size={13} />
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="request-row-meta">
-                      {item.attachmentsCount > 0 ? (
-                        <small>
-                          {item.attachmentsCount} file
-                          {item.attachmentsCount === 1 ? "" : "s"}
-                        </small>
-                      ) : null}
-                      <small>
-                        <Clock3 size={12} />
-                        {new Date(item.updatedAt).toLocaleDateString("en-US", {
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </small>
-                      <button
-                        type="button"
-                        className="row-delete-btn"
-                        title="Delete request"
-                        aria-label={`Delete request for ${item.job.customer || item.id}`}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setRequestToDelete(item);
-                        }}
-                      >
-                        <Trash2 size={15} />
-                      </button>
-                      <ArrowRight size={16} />
-                    </span>
-                  </div>
-                ))}
-                {!filteredRequests.length ? (
-                  <p className="shell-empty-filter">
-                    No requests match this view.
-                  </p>
-                ) : null}
-              </div>
+              <RequestQueue requests={filteredRequests} onOpen={id=>void openRequestById(id)} onDelete={setRequestToDelete}/>
             )}
           </section>
           <footer className="home-footer">

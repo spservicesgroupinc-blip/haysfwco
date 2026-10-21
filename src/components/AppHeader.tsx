@@ -1,195 +1,78 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import {
-  ArrowLeft,
-  Inbox,
-  ListChecks,
-  Menu,
-  ShieldCheck,
-  X,
-  Zap,
-} from "lucide-react";
+import { ArrowLeft, Inbox, ListChecks, Plus, Wrench, X } from "lucide-react";
 import type { NavDestination } from "../services/navigation";
 import "./AppHeader.css";
-
-const NAV_ITEMS: {
-  id: NavDestination;
-  label: string;
-  icon: ReactNode;
-}[] = [
-  { id: "simple", label: "Quick request", icon: <Zap size={16} /> },
-  { id: "review", label: "Estimator review", icon: <Inbox size={16} /> },
-  {
-    id: "workspaces",
-    label: "Jobs & Documents",
-    icon: <ListChecks size={16} />,
-  },
-  { id: "jobs", label: "Import jobs", icon: <ListChecks size={16} /> },
-];
-
 export interface AppHeaderProps {
-  /** The section on screen, highlighted in the navigation. */
   current: NavDestination | "request" | "workspace";
   onNavigate: (destination: NavDestination) => void;
-  /**
-   * The way out of this screen. Sub-pages always show one so a phone user is
-   * never stranded without a back control.
-   */
   back?: { label: string; onClick: () => void };
-  /** Breadcrumb text shown next to the back control. */
-  subtitle?: ReactNode;
-  /** Extra controls for the screen. */
-  actions?: ReactNode;
-  /** Small label next to the brand. */
-  context?: string;
-  /** In-flight work, surfaced as a progress bar under the header. */
-  busy?: string;
+  subtitle?: ReactNode; actions?: ReactNode; context?: string; busy?: string;
 }
-
-function BrandMark() {
-  return (
-    <>
-      <svg viewBox="0 0 65 42" aria-hidden="true">
-        <rect width="14" height="42" fill="#dc2626" />
-        <rect x="36" width="14" height="42" fill="#1a1a1a" />
-        <rect x="14" y="14" width="51" height="14" fill="#1a1a1a" />
-      </svg>
-      <div>
-        <strong>Hays+Sons</strong>
-        <span>CHANGE ORDERS</span>
-      </div>
-    </>
-  );
-}
-
-export default function AppHeader({
-  current,
-  onNavigate,
-  back,
-  subtitle,
-  actions,
-  context,
-  busy,
-}: AppHeaderProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
+export default function AppHeader({current, onNavigate, back, subtitle, actions, context, busy}: AppHeaderProps) {
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const headerRef = useRef<HTMLElement>(null);
-
+  const toolsRef = useRef<HTMLDivElement>(null);
+  const toolsButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const node = headerRef.current;
     if (!node) return;
-    const publish = () =>
-      document.documentElement.style.setProperty(
-        "--app-header-height",
-        `${node.offsetHeight}px`,
-      );
-    publish();
-    const observer = new ResizeObserver(publish);
-    observer.observe(node);
+    const publish = () => document.documentElement.style.setProperty("--app-header-height", node.offsetHeight + "px");
+    publish(); const observer = new ResizeObserver(publish); observer.observe(node);
     return () => observer.disconnect();
   }, []);
-
-  // A section change always closes the sheet, and Escape backs out of it.
-  useEffect(() => setMenuOpen(false), [current]);
+  useEffect(() => setToolsOpen(false), [current]);
   useEffect(() => {
-    if (!menuOpen) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
+    if (!toolsOpen) return;
+    const dismiss = (e: PointerEvent) => { if (!toolsRef.current?.contains(e.target as Node)) setToolsOpen(false); };
+    const escape = (e: KeyboardEvent) => { if (e.key === "Escape") { setToolsOpen(false); toolsButton.current?.focus(); } };
+    document.addEventListener("pointerdown", dismiss); document.addEventListener("keydown", escape);
+    return () => { document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape); };
+  }, [toolsOpen]);
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const update = () => {
+      const editing = document.activeElement?.matches("input,textarea,[contenteditable=true]");
+      const open = Boolean(editing && viewport && window.innerHeight - viewport.height > 120);
+      setKeyboardOpen(open); document.documentElement.classList.toggle("keyboard-open", open);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [menuOpen]);
-
-  const isCurrent = (id: NavDestination) =>
-    current === id ||
-    (id === "review" && current === "request") ||
-    (id === "workspaces" && current === "workspace");
-
-  return (
+    viewport?.addEventListener("resize", update); document.addEventListener("focusout", update);
+    return () => { viewport?.removeEventListener("resize", update); document.removeEventListener("focusout", update); document.documentElement.classList.remove("keyboard-open"); };
+  }, []);
+  const navigate = (destination: NavDestination) => { setToolsOpen(false); onNavigate(destination); };
+  const active = (id: string) => current === id || (id === "review" && current === "request") || (id === "workspaces" && current === "workspace");
+  return <>
     <header className="app-header" ref={headerRef}>
       <div className="app-header-row">
-        <a
-          className="brand"
-          href="#/"
-          aria-label="Hays + Sons change orders home"
-          onClick={(event) => {
-            event.preventDefault();
-            setMenuOpen(false);
-            onNavigate("review");
-          }}
-        >
-          <BrandMark />
+        <a className="brand" href="#/" aria-label="Hays + Sons change orders home" onClick={e => { e.preventDefault(); navigate("review"); }}>
+          <svg viewBox="0 0 65 42" aria-hidden="true"><rect width="14" height="42" fill="#dc2626"/><rect x="36" width="14" height="42" fill="#1a1a1a"/><rect x="14" y="14" width="51" height="14" fill="#1a1a1a"/></svg>
+          <div><strong>Hays+Sons</strong><span>CHANGE ORDERS</span></div>
         </a>
         <div className="app-header-tools">
-          {context ? (
-            <span className="local-label">
-              <ShieldCheck size={15} />
-              {context}
-            </span>
-          ) : null}
-          {actions}
-          <nav
-            id="app-header-nav"
-            className={`app-nav${menuOpen ? " is-open" : ""}`}
-            aria-label="Sections"
-          >
-            {NAV_ITEMS.map((item) => {
-              const active = isCurrent(item.id);
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={`button small app-nav-item${active ? " is-current" : ""}`}
-                  aria-current={active ? "page" : undefined}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onNavigate(item.id);
-                  }}
-                >
-                  {item.icon}
-                  {item.label}
-                </button>
-              );
-            })}
+          {context && <span className="local-label">{context}</span>}{actions}
+          <nav className="desktop-nav" aria-label="Main navigation">
+            <button className={"nav-link" + (active("review") ? " is-current" : "")} aria-current={active("review") ? "page" : undefined} onClick={() => navigate("review")}>Requests</button>
+            <button className={"nav-link" + (active("workspaces") ? " is-current" : "")} aria-current={active("workspaces") ? "page" : undefined} onClick={() => navigate("workspaces")}>Jobs & Documents</button>
           </nav>
-          <button
-            type="button"
-            className="button small app-menu-button"
-            aria-expanded={menuOpen}
-            aria-controls="app-header-nav"
-            onClick={() => setMenuOpen((open) => !open)}
-          >
-            {menuOpen ? <X size={16} /> : <Menu size={16} />}
-            Menu
-          </button>
+          <div className="tools-menu" ref={toolsRef}>
+            <button ref={toolsButton} className="button tools-toggle" aria-expanded={toolsOpen} aria-controls="app-tools" onClick={() => setToolsOpen(!toolsOpen)}>{toolsOpen ? <X size={17}/> : <Wrench size={17}/>} Tools</button>
+            {toolsOpen && <nav id="app-tools" className="tools-popover" aria-label="Tools">
+              <p>Import & maintenance</p>
+              <button onClick={() => navigate("jobs")}>Import jobs <small>Replace the job directory</small></button>
+              <button onClick={() => navigate("migration")}>Import document jobs <small>Bring existing saved jobs into this app</small></button>
+              <button onClick={() => navigate("reference")}>Customer reference CSV <small>Manage the stored reference file</small></button>
+            </nav>}
+          </div>
+          {current !== "simple" && <button className="button primary desktop-new-request" onClick={() => navigate("simple")}><Plus size={18}/> New request</button>}
         </div>
       </div>
-      {back || subtitle ? (
-        <div className="app-header-sub">
-          {back ? (
-            <button
-              type="button"
-              className="app-back"
-              onClick={() => {
-                setMenuOpen(false);
-                back.onClick();
-              }}
-            >
-              <ArrowLeft size={16} />
-              {back.label}
-            </button>
-          ) : null}
-          {subtitle ? <span className="app-subtitle">{subtitle}</span> : null}
-        </div>
-      ) : null}
-      {busy ? (
-        <div
-          className="app-progress"
-          role="status"
-          aria-live="polite"
-          aria-label={busy}
-        >
-          <span />
-        </div>
-      ) : null}
+      {(back || subtitle) && <div className="app-header-sub">{back && <button className="app-back" onClick={back.onClick}><ArrowLeft size={17}/>{back.label}</button>}{subtitle && <span className="app-subtitle">{subtitle}</span>}</div>}
+      {busy && <div className="app-progress" role="status" aria-label={busy}><span/></div>}
     </header>
-  );
+    <nav className={"mobile-nav" + (keyboardOpen ? " is-hidden" : "")} aria-label="Phone navigation">
+      <button aria-current={active("review") ? "page" : undefined} onClick={() => navigate("review")}><Inbox size={20}/><span>Requests</span></button>
+      <button className="mobile-create" aria-current={current === "simple" ? "page" : undefined} onClick={() => navigate("simple")}><Plus size={22}/><span>New request</span></button>
+      <button aria-current={active("workspaces") ? "page" : undefined} onClick={() => navigate("workspaces")}><ListChecks size={20}/><span>Jobs</span></button>
+    </nav>
+  </>;
 }

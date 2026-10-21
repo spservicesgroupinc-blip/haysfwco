@@ -9,13 +9,13 @@
 export type View =
   | { kind: "review" }
   | { kind: "request"; id: string }
-  | { kind: "workspaces" }
+  | { kind: "workspaces"; tool?: "migration" | "reference" }
   | { kind: "workspace"; id: string }
   | { kind: "jobs" }
   | { kind: "simple" };
 
 /** The sections the app header can jump between. */
-export type NavDestination = "simple" | "review" | "jobs" | "workspaces";
+export type NavDestination = "simple" | "review" | "jobs" | "workspaces" | "migration" | "reference";
 
 export const REVIEW: View = { kind: "review" };
 export const HOME: View = REVIEW;
@@ -23,6 +23,7 @@ export const HOME: View = REVIEW;
 const VIEW_KEY = "hays-active-view";
 
 export function destinationToView(destination: NavDestination): View {
+  if (destination === "migration" || destination === "reference") return { kind: "workspaces", tool: destination };
   if (destination === "simple") return { kind: "simple" };
   if (destination === "jobs") return { kind: "jobs" };
   if (destination === "workspaces") return { kind: "workspaces" };
@@ -32,7 +33,7 @@ export function destinationToView(destination: NavDestination): View {
 export function viewToHash(view: View): string {
   switch (view.kind) {
     case "workspaces":
-      return "#/workspaces";
+      return `#/workspaces${view.tool ? `?tool=${view.tool}` : ""}`;
     case "workspace":
       return `#/workspaces/${encodeURIComponent(view.id)}`;
     case "request":
@@ -57,7 +58,7 @@ export function hashToView(hash: string): View | null {
     case "workspaces":
       return parts[1]
         ? { kind: "workspace", id: parts[1] }
-        : { kind: "workspaces" };
+        : { kind: "workspaces", ...(["migration", "reference"].includes(new URLSearchParams(hash.split("?")[1]).get("tool") || "") ? { tool: new URLSearchParams(hash.split("?")[1]).get("tool") as "migration" | "reference" } : {}) };
     case "simple":
       return { kind: "simple" };
     case "jobs":
@@ -73,6 +74,7 @@ export function hashToView(hash: string): View | null {
 
 export function sameView(a: View, b: View): boolean {
   if (a.kind !== b.kind) return false;
+  if (a.kind === "workspaces" && b.kind === "workspaces") return a.tool === b.tool;
   if (a.kind === "request" && b.kind === "request") return a.id === b.id;
   if (a.kind === "workspace" && b.kind === "workspace") return a.id === b.id;
   return true;
@@ -90,7 +92,7 @@ export function viewLabel(view: View): string {
     case "jobs":
       return "Import jobs";
     case "review":
-      return "Estimator review";
+      return "Requests";
     default:
       return "Estimator review";
   }
@@ -107,10 +109,7 @@ export function initialView(): View {
   const hash = window.location.hash;
   if (hash.length > 1) {
     const fromHash = hashToView(hash);
-    if (
-      fromHash &&
-      ["request", "workspace", "workspaces"].includes(fromHash.kind)
-    )
+    if (fromHash)
       return fromHash;
   }
   return REVIEW;
