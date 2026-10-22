@@ -37,9 +37,12 @@ export function customerDocumentDraft(request: ChangeRequest): ChangeRequest {
       scope: request.finalChangeOrder?.scope.trim()
         ? request.finalChangeOrder.scope
         : scope,
+      // The PM's submitted amount is the estimator's starting price. An
+      // estimator edit always wins, and the new contract total recalculates
+      // from this value as soon as the modal opens.
       amount: request.finalChangeOrder?.amount.trim()
         ? request.finalChangeOrder.amount
-        : "",
+        : signedAmountValue(request.knownChangeAmount),
     },
   };
 }
@@ -48,6 +51,17 @@ export const signedMoneyCents = (value: string): bigint | null =>
   /^[+-]?\d+(?:\.\d{1,2})?$/.test(value.trim())
     ? moneyCents(value.trim().replace(/^\+/, ""))
     : null;
+
+/** Canonical signed amount text for the document input, e.g. "+1250.19". */
+export function signedAmountValue(value: string | undefined): string {
+  if (!value?.trim()) return "";
+  const cents = signedMoneyCents(value);
+  if (cents === null) return "";
+  const absolute = cents < 0n ? -cents : cents;
+  const dollars = (absolute / 100n).toString();
+  const fraction = (absolute % 100n).toString().padStart(2, "0");
+  return `${cents < 0n ? "-" : "+"}${dollars}.${fraction}`;
+}
 
 export function signedAmountLabel(value: string | undefined): string {
   if (!value?.trim()) return "Not provided";
