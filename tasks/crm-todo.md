@@ -1,5 +1,7 @@
 # CRM Features — Task List
 
+Status: complete (2026-10-22). All implementation items built and verified.
+
 ## Contract
 - [x] JobStage type + Workspace.stage/customerId
 - [x] src/crm/types.ts
@@ -25,3 +27,6 @@
 - [x] npm test green (124 passed, incl. 12 new CRM tests)
 - [x] npm run build clean
 - [x] Playwright CRM spec green
+
+## Outstanding (deployment only)
+- [ ] Manual redeploy of `apps-script/Code.gs` to the live Apps Script web app (no CI deploy)
