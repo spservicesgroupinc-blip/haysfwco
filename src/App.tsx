@@ -839,15 +839,6 @@ export default function App() {
             <div className="ops-head-text">
               <h1>Requests</h1>
             </div>
-            <div className="ops-head-actions">
-              <button
-                className="button primary large"
-                onClick={() => goTo({ kind: "simple" })}
-              >
-                <Plus size={20} />
-                New request
-              </button>
-            </div>
           </header>
 
           {homeNotice ? (

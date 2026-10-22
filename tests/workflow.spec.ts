@@ -1150,7 +1150,7 @@ test("estimators copy saved answers and text, including after corrections", asyn
     page.getByRole("button", { name: "Copy Dash note", exact: true }),
   ).toBeDisabled();
   await page
-    .getByRole("checkbox", { name: "Change order", exact: true })
+    .getByRole("radio", { name: "Change order", exact: true })
     .check();
   await page
     .getByRole("checkbox", { name: "Yes, customer credits", exact: true })
