@@ -12,10 +12,19 @@ export type View =
   | { kind: "workspaces"; tool?: "migration" | "reference" }
   | { kind: "workspace"; id: string }
   | { kind: "jobs" }
-  | { kind: "simple" };
+  | { kind: "simple" }
+  | { kind: "customers" }
+  | { kind: "customer"; id: string };
 
 /** The sections the app header can jump between. */
-export type NavDestination = "simple" | "review" | "jobs" | "workspaces" | "migration" | "reference";
+export type NavDestination =
+  | "simple"
+  | "review"
+  | "jobs"
+  | "workspaces"
+  | "migration"
+  | "reference"
+  | "customers";
 
 export const REVIEW: View = { kind: "review" };
 export const HOME: View = REVIEW;
@@ -27,6 +36,7 @@ export function destinationToView(destination: NavDestination): View {
   if (destination === "simple") return { kind: "simple" };
   if (destination === "jobs") return { kind: "jobs" };
   if (destination === "workspaces") return { kind: "workspaces" };
+  if (destination === "customers") return { kind: "customers" };
   return REVIEW;
 }
 
@@ -38,6 +48,10 @@ export function viewToHash(view: View): string {
       return `#/workspaces/${encodeURIComponent(view.id)}`;
     case "request":
       return `#/requests/${encodeURIComponent(view.id)}`;
+    case "customer":
+      return `#/customers/${encodeURIComponent(view.id)}`;
+    case "customers":
+      return "#/customers";
     case "simple":
       return "#/simple";
     case "jobs":
@@ -67,6 +81,8 @@ export function hashToView(hash: string): View | null {
       return REVIEW;
     case "requests":
       return parts[1] ? { kind: "request", id: parts[1] } : REVIEW;
+    case "customers":
+      return parts[1] ? { kind: "customer", id: parts[1] } : { kind: "customers" };
     default:
       return null;
   }
@@ -77,6 +93,7 @@ export function sameView(a: View, b: View): boolean {
   if (a.kind === "workspaces" && b.kind === "workspaces") return a.tool === b.tool;
   if (a.kind === "request" && b.kind === "request") return a.id === b.id;
   if (a.kind === "workspace" && b.kind === "workspace") return a.id === b.id;
+  if (a.kind === "customer" && b.kind === "customer") return a.id === b.id;
   return true;
 }
 
@@ -91,6 +108,9 @@ export function viewLabel(view: View): string {
       return "Quick request";
     case "jobs":
       return "Import jobs";
+    case "customers":
+    case "customer":
+      return "Customers";
     case "review":
       return "Requests";
     default:
@@ -129,6 +149,10 @@ export function readStoredView(): View {
         return { kind: "workspaces" };
       case "request":
         return parsed.id ? { kind: "request", id: String(parsed.id) } : REVIEW;
+      case "customer":
+        return parsed.id ? { kind: "customer", id: String(parsed.id) } : { kind: "customers" };
+      case "customers":
+        return { kind: "customers" };
       case "simple":
         return { kind: "simple" };
       case "jobs":

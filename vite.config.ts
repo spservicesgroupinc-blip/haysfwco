@@ -2,7 +2,7 @@ import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import tailwindcss from '@tailwindcss/vite';
-import { createWorkspaceDevApi } from './scripts/workspace-dev-api.ts';
+import { createWorkspaceDevApi, createCrmDevApi } from './scripts/workspace-dev-api.ts';
 
 interface MockRequest {
   schemaVersion: 2;
@@ -165,6 +165,7 @@ function localApiPlugin(): Plugin {
     { name: string; mimeType: string; data: string }
   >();
   const workspaceApi = createWorkspaceDevApi(requests);
+  const crmApi = createCrmDevApi();
 
   function summarize(r: MockRequest) {
     return {
@@ -219,6 +220,8 @@ function localApiPlugin(): Plugin {
     try {
       const workspaceResult = workspaceApi(action, { ...Object.fromEntries(url.searchParams), ...body });
       if (workspaceResult !== undefined) return respond(workspaceResult);
+      const crmResult = crmApi(action, { ...Object.fromEntries(url.searchParams), ...body });
+      if (crmResult !== undefined) return respond(crmResult);
 
       if (action === "bootstrap") {
         return respond({

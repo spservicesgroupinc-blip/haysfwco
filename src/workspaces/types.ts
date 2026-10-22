@@ -1,4 +1,5 @@
 import type { RestorationJobData } from '../documents/types/jobData';
+import type { JobStage } from '../types';
 
 /** Permanent job identity; directory imports and request snapshots are independent. */
 export interface Workspace {
@@ -8,6 +9,10 @@ export interface Workspace {
   record: RestorationJobData;
   originalContract: string;
   previousChanges: string;
+  /** Job lifecycle stage for the CRM pipeline view. */
+  stage?: JobStage;
+  /** Links this permanent job to a CRM customer record. */
+  customerId?: string;
   sourceRecordId?: string;
   migration?: { source: string; sourceRecordId: string; variant: string; sourceKey: string; importedAt: string; original: unknown };
 }

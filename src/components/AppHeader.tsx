@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowLeft, Inbox, ListChecks, Plus, Wrench, X } from "lucide-react";
+import { ArrowLeft, Inbox, ListChecks, Plus, Users, Wrench, X } from "lucide-react";
 import type { NavDestination } from "../services/navigation";
 import "./AppHeader.css";
 export interface AppHeaderProps {
-  current: NavDestination | "request" | "workspace";
+  current: NavDestination | "request" | "workspace" | "customer";
   onNavigate: (destination: NavDestination) => void;
   back?: { label: string; onClick: () => void };
   subtitle?: ReactNode; actions?: ReactNode; context?: string; busy?: string;
@@ -40,7 +40,7 @@ export default function AppHeader({current, onNavigate, back, subtitle, actions,
     return () => { viewport?.removeEventListener("resize", update); document.removeEventListener("focusout", update); document.documentElement.classList.remove("keyboard-open"); };
   }, []);
   const navigate = (destination: NavDestination) => { setToolsOpen(false); onNavigate(destination); };
-  const active = (id: string) => current === id || (id === "review" && current === "request") || (id === "workspaces" && current === "workspace");
+  const active = (id: string) => current === id || (id === "review" && current === "request") || (id === "workspaces" && current === "workspace") || (id === "customers" && current === "customer");
   return <>
     <header className="app-header" ref={headerRef}>
       <div className="app-header-row">
@@ -52,6 +52,7 @@ export default function AppHeader({current, onNavigate, back, subtitle, actions,
           {context && <span className="local-label">{context}</span>}{actions}
           <nav className="desktop-nav" aria-label="Main navigation">
             <button className={"nav-link" + (active("review") ? " is-current" : "")} aria-current={active("review") ? "page" : undefined} onClick={() => navigate("review")}>Requests</button>
+            <button className={"nav-link" + (active("customers") ? " is-current" : "")} aria-current={active("customers") ? "page" : undefined} onClick={() => navigate("customers")}>Customers</button>
             <button className={"nav-link" + (active("workspaces") ? " is-current" : "")} aria-current={active("workspaces") ? "page" : undefined} onClick={() => navigate("workspaces")}>Jobs & Documents</button>
           </nav>
           <div className="tools-menu" ref={toolsRef}>
@@ -71,6 +72,7 @@ export default function AppHeader({current, onNavigate, back, subtitle, actions,
     </header>
     <nav className={"mobile-nav" + (keyboardOpen ? " is-hidden" : "")} aria-label="Phone navigation">
       <button aria-current={active("review") ? "page" : undefined} onClick={() => navigate("review")}><Inbox size={20}/><span>Requests</span></button>
+      <button aria-current={active("customers") ? "page" : undefined} onClick={() => navigate("customers")}><Users size={20}/><span>Customers</span></button>
       <button className="mobile-create" aria-current={current === "simple" ? "page" : undefined} onClick={() => navigate("simple")}><Plus size={22}/><span>New request</span></button>
       <button aria-current={active("workspaces") ? "page" : undefined} onClick={() => navigate("workspaces")}><ListChecks size={20}/><span>Jobs</span></button>
     </nav>
