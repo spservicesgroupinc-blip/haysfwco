@@ -27,6 +27,8 @@ export interface RequestAttachment {
 export interface ChangeRequest {
   /** Permanent shared job; request.job remains an independent historical snapshot. */
   workspaceId?: string;
+  /** CRM customer this change order belongs to, when the customer is known. */
+  customerId?: string;
   schemaVersion: 2;
   requestType?: "change_order" | "insurance_supplement";
   customerCredits?: boolean;
@@ -58,6 +60,7 @@ export interface ChangeRequest {
 }
 export interface RequestSummary {
   workspaceId?: string;
+  customerId?: string;
   id: string;
   revision: number;
   createdAt: string;

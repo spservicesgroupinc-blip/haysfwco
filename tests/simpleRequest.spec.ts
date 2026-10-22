@@ -71,6 +71,7 @@ async function installMockApi(
   page: Page,
   directory: typeof jobs = jobs,
   seedRequests: Record<string, any>[] = [],
+  customers: Record<string, any>[] = [],
 ): Promise<MockApi> {
   const requests = new Map<string, any>(
     seedRequests.map((request) => [request.id, request]),
@@ -159,6 +160,8 @@ async function installMockApi(
         return respond({ ok: true, drafts: [] });
       case "listJobs":
         return respond({ ok: true, jobs: directory });
+      case "listCustomers":
+        return respond({ ok: true, customers });
       case "saveRequest":
         api.saved.push(body.request);
         return respond({ ok: true, request: commit(body.request) });
@@ -232,6 +235,27 @@ async function pickCustomer(page: Page, customer: string) {
     .first()
     .click();
 }
+
+/**
+ * Customer-directory traffic (loading the customer list behind the picker and
+ * the background sync of uploaded jobs) runs alongside the request workflow.
+ * Tests that pin the request actions filter it out.
+ */
+const CRM_ACTIONS = new Set([
+  "listCustomers",
+  "openCustomer",
+  "saveCustomer",
+  "mergeCustomers",
+  "listActivities",
+  "addActivity",
+  "listTasks",
+  "saveTask",
+]);
+
+const requestActions = (api: MockApi) =>
+  api.actions.filter(
+    (action) => action !== "bootstrap" && !CRM_ACTIONS.has(action),
+  );
 
 test("submission returns home before saving and notifies on the current screen after confirmation", async ({
   page,
@@ -645,9 +669,7 @@ test("a project manager sends a text-only quick request", async ({ page }) => {
     "Added insulation to the open kitchen wall",
   );
   // A text-only request saves once, already in the queue.
-  expect(api.actions.filter((action) => action !== "bootstrap")).toEqual([
-    "saveRequest",
-  ]);
+  expect(requestActions(api)).toEqual(["saveRequest"]);
   expect(api.transitions).toHaveLength(0);
 });
 
@@ -781,7 +803,7 @@ test("a photo is marked up before it is sent, with an optional PDF", async ({
   expect(api.uploads[1].name).toBe("no-text.pdf");
   // The upload endpoint stores files in Drive but never edits the request, so
   // the returned rows must be saved onto the request before it lands in the queue.
-  expect(api.actions.filter((action) => action !== "bootstrap")).toEqual([
+  expect(requestActions(api)).toEqual([
     "saveRequest",
     "uploadAttachment",
     "uploadAttachment",
@@ -965,7 +987,9 @@ test("typing finds the customer instead of scrolling a long list", async ({
   // sendable with whatever the PM typed.
   await field.fill("Walk-in customer");
   await expect(page.locator(".sr-summary")).toHaveCount(0);
-  await expect(page.locator(".sr-match-empty")).toContainText("No job matches");
+  await expect(page.locator(".sr-match-empty")).toContainText(
+    "No customer or job matches",
+  );
   await page
     .getByLabel("What changed?", { exact: true })
     .fill("Siding damage on the north wall");
@@ -975,4 +999,55 @@ test("typing finds the customer instead of scrolling a long list", async ({
   );
   expect(api.saved[0].job.customer).toBe("Walk-in customer");
   expect(api.saved[0].job.jobNumber).toBe("");
+});
+
+test("typing autocompletes an uploaded customer and links the change order to it", async ({
+  page,
+}) => {
+  // This customer came from a job upload but has no active job in the current
+  // directory, so only the loaded customer list can offer it.
+  const api = await installMockApi(page, jobs, [], [
+    {
+      id: "cust-lakeside",
+      name: "Lakeside Medical Group",
+      phone: "260-555-0900",
+      email: "facilities@lakeside.example.com",
+      address: "40 Lakeside Dr, Fort Wayne, IN 46804",
+      jobCount: 2,
+      openTaskCount: 0,
+      updatedAt: "2026-10-10T12:00:00.000Z",
+    },
+  ]);
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
+  const field = page.getByLabel("Customer / job", { exact: true });
+
+  await field.fill("lakeside");
+  const option = page.getByRole("button", {
+    name: "Use customer Lakeside Medical Group",
+  });
+  await expect(option).toBeVisible();
+  await option.click();
+
+  // The loaded details fill the request instead of being retyped.
+  await expect(field).toHaveValue("Lakeside Medical Group");
+  await expect(page.locator(".sr-summary")).toContainText("260-555-0900");
+  await expect(page.locator(".sr-summary")).toContainText(
+    "facilities@lakeside.example.com",
+  );
+
+  await page
+    .getByLabel("What changed?", { exact: true })
+    .fill("Replace wet ceiling tiles");
+  await page.getByRole("button", { name: "Send to estimating" }).click();
+  await expect(page.locator(".notice.success")).toContainText(
+    "Sent to estimating: Lakeside Medical Group.",
+  );
+  expect(api.saved[0].customerId).toBe("cust-lakeside");
+  expect(api.saved[0].job.customer).toBe("Lakeside Medical Group");
+  expect(api.saved[0].job.customerPhone).toBe("260-555-0900");
+  expect(api.saved[0].job.customerEmail).toBe(
+    "facilities@lakeside.example.com",
+  );
+  expect(api.saved[0].jobDirectoryId).toBeUndefined();
 });
