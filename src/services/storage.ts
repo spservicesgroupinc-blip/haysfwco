@@ -197,6 +197,23 @@ function saveLocalRequests(items: ChangeRequest[]): void {
   }
 }
 
+/**
+ * Requests this device has already loaded, without the demo seed. Read-only
+ * callers (linking a customer to its change orders) use this instead of
+ * `getLocalRequests`, which invents demo rows on an empty device.
+ */
+export function cachedRequests(): ChangeRequest[] {
+  if (typeof localStorage === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_REQUESTS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as ChangeRequest[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function getLocalJobs(): JobEntry[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_JOBS);
@@ -253,6 +270,7 @@ function saveLocalAttachment(attachmentId: string, item: { name: string; mimeTyp
 function summarizeRequest(r: ChangeRequest): RequestSummary {
   return {
     ...(r.workspaceId ? { workspaceId: r.workspaceId } : {}),
+    ...(r.customerId ? { customerId: r.customerId } : {}),
     id: r.id,
     revision: r.revision,
     createdAt: r.createdAt,

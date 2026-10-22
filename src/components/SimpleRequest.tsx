@@ -22,6 +22,13 @@ import {
 } from "../types";
 import { createRequest, createRequestedChange } from "../services/requests";
 import { blobToBase64, openRequest } from "../services/storage";
+import { listCustomers, subscribeCrm } from "../crm";
+import type { CustomerSummary } from "../crm/types";
+import {
+  customerIdForPick,
+  customerIdOfOption,
+  customerOptions,
+} from "../services/customerDirectory";
 import {
   priorChangesForJob,
   type PriorChangeSummary,
@@ -66,6 +73,10 @@ interface PhotoEntry {
 /** How a directory row reads in the field and in the suggestion list. */
 const jobLabel = (job: JobEntry) =>
   `${job.customer || "No customer name"} — ${job.jobNumber || "no job number"}`;
+
+/** A customer record has no job number, so its label is just the name. */
+const optionLabel = (job: JobEntry) =>
+  customerIdOfOption(job.id) ? job.customer || "No customer name" : jobLabel(job);
 
 /*
  * Minimal Speech Recognition surface. It is declared locally so the browser
@@ -133,6 +144,7 @@ function buildRequest(
   details: {
     job: JobEntry | null;
     customer: string;
+    customerId?: string;
     note: string;
     prior?: PriorChangeSummary | null;
   } & Pick<
@@ -144,7 +156,9 @@ function buildRequest(
     !base?.workspaceId || details.job?.id === `workspace-${base.workspaceId}`;
   const request = sameWorkspace && base ? base : createRequest();
   const description = details.note.trim();
-  return {
+  const directoryJobId =
+    details.job && !customerIdOfOption(details.job.id) ? details.job.id : undefined;
+  const next: ChangeRequest = {
     ...request,
     updatedAt: new Date().toISOString(),
     status: "submitted",
@@ -184,8 +198,14 @@ function buildRequest(
           },
         ]
       : [],
-    ...(details.job ? { jobDirectoryId: details.job.id } : {}),
   };
+  // The change order follows the customer the PM picked, including when they
+  // typed a name that matches a loaded customer record.
+  if (details.customerId) next.customerId = details.customerId;
+  else delete next.customerId;
+  if (directoryJobId) next.jobDirectoryId = directoryJobId;
+  else delete next.jobDirectoryId;
+  return next;
 }
 
 function PhotoTile({
@@ -273,14 +293,6 @@ export default function SimpleRequest(
         updatedAt: initialRequest.updatedAt,
       }
     : undefined;
-  const directoryJobs = restored?.selectedJob ? [restored.selectedJob,...jobs.filter(job=>job.active && job.id !== restored.selectedJob!.id)] : seededJob
-    ? [
-        seededJob,
-        ...jobs.filter(
-          (job) => job.active && job.jobNumber !== seededJob.jobNumber,
-        ),
-      ]
-    : jobs.filter((job) => job.active);
   const customerId = useId();
   const noteId = useId();
   const amountId = useId();
@@ -290,6 +302,34 @@ export default function SimpleRequest(
   const submissionStarted = useRef(false);
 
   const [jobId, setJobId] = useState(restored?.selectedJob?.id || seededJob?.id || "");
+  // Every customer the device knows: uploaded job customers, hand-added
+  // contacts, and their saved details.
+  const [customers, setCustomers] = useState<CustomerSummary[]>([]);
+  // Only active directory rows are offered; without any, the page falls back to
+  // a typed customer name so it still works.
+  const customerChoices = useMemo(
+    () => customerOptions(jobs, customers),
+    [jobs, customers],
+  );
+  const directoryJobs = useMemo(() => {
+    const rows = restored?.selectedJob
+      ? [
+          restored.selectedJob,
+          ...jobs.filter(
+            (job) => job.active && job.id !== restored.selectedJob!.id,
+          ),
+        ]
+      : seededJob
+        ? [
+            seededJob,
+            ...jobs.filter(
+              (job) => job.active && job.jobNumber !== seededJob.jobNumber,
+            ),
+          ]
+        : jobs.filter((job) => job.active);
+    // A picked customer row survives restores, so ids, not names, dedupe here.
+    return [...new Map([...rows, ...customerChoices].map((row) => [row.id, row])).values()];
+  }, [jobs, customerChoices, restored?.selectedJob, seededJob]);
   // The customer/job search text. In directory mode it is the type-ahead query
   // and then the chosen job's label; without a directory it is simply the
   // customer's name, so the page still works on a bare device.
@@ -322,7 +362,13 @@ export default function SimpleRequest(
   // and the textarea keeps working.
   const [voiceSupported] = useState(() => speechRecognition() !== null);
 
-  const selectedJob = useMemo(()=>directoryJobs.find(job=>job.id===jobId) ?? null,[jobs,jobId,initialDraft,initialRequest]);
+  const selectedJob = useMemo(()=>directoryJobs.find(job=>job.id===jobId) ?? null,[directoryJobs,jobId]);
+  // The change order this page creates belongs to the customer the PM picked
+  // or typed, so the customer record keeps its change order history.
+  const linkedCustomerId = useMemo(
+    () => customerIdForPick(selectedJob, customers, customerText),
+    [selectedJob, customers, customerText],
+  );
   const draftPhotos=useMemo(()=>photos.map(photo=>({id:photo.id,name:photo.file.name,type:photo.blob.type,lastModified:photo.file.lastModified,blob:photo.blob,edited:photo.edited})),[photos]);
   const draftPdf=useMemo(()=>pdf ? {name:pdf.name,type:pdf.type,lastModified:pdf.lastModified,blob:pdf} : null,[pdf]);
   const draft = useRequestDraft(draftId, {
@@ -340,7 +386,7 @@ export default function SimpleRequest(
   const editing = photos.find((photo) => photo.id === editingId) ?? null;
   const fallbackCustomer = !directoryJobs.length;
   const query = customerText.trim().toLowerCase();
-  const selectedLabel = selectedJob ? jobLabel(selectedJob) : "";
+  const selectedLabel = selectedJob ? optionLabel(selectedJob) : "";
   // Suggestions appear while the PM types and never for the job already chosen.
   const showMatches =
     !fallbackCustomer &&
@@ -350,7 +396,7 @@ export default function SimpleRequest(
   const matches = showMatches
     ? directoryJobs
         .filter((job) =>
-          `${job.customer} ${job.jobNumber} ${job.address} ${job.projectManager}`
+          `${job.customer} ${job.jobNumber} ${job.address} ${job.projectManager} ${job.customerPhone} ${job.customerEmail}`
             .toLowerCase()
             .includes(query),
         )
@@ -360,10 +406,26 @@ export default function SimpleRequest(
 
   const chooseJob = (job: JobEntry) => {
     setJobId(job.id);
-    setCustomerText(jobLabel(job));
+    setCustomerText(optionLabel(job));
     setMatchListOpen(false);
     setCustomerError("");
   };
+
+  // The loaded customer directory arrives after the first paint and may change
+  // when a job upload adds customers, so the picker follows it live.
+  useEffect(() => {
+    let active = true;
+    const read = async () => {
+      try {
+        const rows = await listCustomers();
+        if (active) setCustomers(rows);
+      } catch {
+        // The job directory still autocompletes without the customer records.
+      }
+    };
+    void read();
+    return subscribeCrm(() => void read());
+  }, []);
 
   useEffect(
     () => () => {
@@ -543,6 +605,7 @@ export default function SimpleRequest(
       const request = buildRequest(initialRequest ?? null, {
         job: selectedJob,
         customer,
+        customerId: linkedCustomerId,
         note,
         requestType,
         customerCredits,
@@ -639,29 +702,41 @@ export default function SimpleRequest(
             />
             {showMatches ? (
               <ul className="sr-matches" id={matchListId}>
-                {matches.map((job) => (
-                  <li key={job.id}>
-                    <button
-                      type="button"
-                      className="sr-match"
-                      aria-label={`Use job ${job.jobNumber || "without a number"} for ${job.customer || "this customer"}`}
-                      // Keep focus on the input while the row is pressed. Without
-                      // this the input blurs first on browsers that do not focus a
-                      // button on press (macOS/iOS Safari), the list unmounts, and
-                      // the click never lands — so the pick looked like a no-op.
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => chooseJob(job)}
-                    >
-                      <strong>{job.customer || "No customer name"}</strong>
-                      <span>{job.jobNumber || "No job number"}</span>
-                      {job.address ? <small>{job.address}</small> : null}
-                    </button>
-                  </li>
-                ))}
+                {matches.map((job) => {
+                  const isCustomer = Boolean(customerIdOfOption(job.id));
+                  return (
+                    <li key={job.id}>
+                      <button
+                        type="button"
+                        className="sr-match"
+                        aria-label={
+                          isCustomer
+                            ? `Use customer ${job.customer || "without a name"}`
+                            : `Use job ${job.jobNumber || "without a number"} for ${job.customer || "this customer"}`
+                        }
+                        // Keep focus on the input while the row is pressed. Without
+                        // this the input blurs first on browsers that do not focus a
+                        // button on press (macOS/iOS Safari), the list unmounts, and
+                        // the click never lands — so the pick looked like a no-op.
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => chooseJob(job)}
+                      >
+                        <strong>{job.customer || "No customer name"}</strong>
+                        <span>
+                          {job.jobNumber || (isCustomer ? "Customer" : "No job number")}
+                        </span>
+                        {isCustomer && job.customerPhone ? (
+                          <small>{job.customerPhone}</small>
+                        ) : null}
+                        {job.address ? <small>{job.address}</small> : null}
+                      </button>
+                    </li>
+                  );
+                })}
                 {!matches.length ? (
                   <li className="sr-match-empty">
-                    No job matches “{customerText.trim()}”. You can still send
-                    this with the customer name alone.
+                    No customer or job matches “{customerText.trim()}”. You can
+                    still send this with the customer name alone.
                   </li>
                 ) : null}
               </ul>
@@ -1035,6 +1110,7 @@ export default function SimpleRequest(
               buildRequest(null, {
                 job: selectedJob,
                 customer: (selectedJob?.customer ?? customerText).trim(),
+                customerId: linkedCustomerId,
                 note,
                 requestType,
                 customerCredits,

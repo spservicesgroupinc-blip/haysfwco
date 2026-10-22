@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Briefcase,
+  FileText,
   GitMerge,
   Link2,
   Mail,
@@ -36,6 +37,9 @@ import {
   cachedWorkspaces,
   subscribeWorkspaces,
 } from "../../services/workspaces";
+import { cachedRequests } from "../../services/storage";
+import { customerNameKey } from "../../services/customerDirectory";
+import type { ChangeRequest, RequestStatus } from "../../types";
 import type { WorkspaceRow } from "../../workspaces/types";
 import ActivityTimeline from "./ActivityTimeline";
 import CustomerForm from "./CustomerForm";
@@ -49,6 +53,12 @@ const STAGE_LABELS: Record<JobStage, string> = {
   complete: "Complete",
   closed: "Closed",
 };
+const REQUEST_LABELS: Record<RequestStatus, string> = {
+  submitted: "In queue",
+  in_review: "In review",
+  needs_information: "Needs info",
+  completed: "Completed",
+};
 
 export interface CustomerDetailProps {
   id: string;
@@ -61,6 +71,7 @@ export default function CustomerDetail({ id, onBack }: CustomerDetailProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [customers, setCustomers] = useState<CustomerSummary[]>([]);
   const [workspaces, setWorkspaces] = useState<WorkspaceRow[]>([]);
+  const [requests, setRequests] = useState<ChangeRequest[]>([]);
   const [formOpen, setFormOpen] = useState(false);
   const [mergeFocus, setMergeFocus] = useState(false);
   const [linkJobId, setLinkJobId] = useState("");
@@ -122,6 +133,12 @@ export default function CustomerDetail({ id, onBack }: CustomerDetailProps) {
     void read();
     return subscribeWorkspaces(() => void read());
   }, []);
+
+  // Own change orders are read from this device's request cache: a customer
+  // links to the change orders its picks created, without another round-trip.
+  useEffect(() => {
+    setRequests(cachedRequests());
+  }, [id]);
 
   const handleAddNote = useCallback(
     async (body: string) => {
@@ -224,6 +241,18 @@ export default function CustomerDetail({ id, onBack }: CustomerDetailProps) {
 
   const linked = workspaces.filter((row) => row.workspace.customerId === id);
   const unlinked = workspaces.filter((row) => row.workspace.customerId !== id);
+  // New change orders carry the customer id; older ones are matched by name so
+  // a customer's history is complete the first time they are opened.
+  const customerKey = customerNameKey(customer.name);
+  const linkedRequests = requests
+    .filter(
+      (request) =>
+        request.customerId === id ||
+        (!request.customerId &&
+          customerKey &&
+          customerNameKey(request.job?.customer) === customerKey),
+    )
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 
   return (
     <div className="crm crm-detail">
@@ -370,6 +399,49 @@ export default function CustomerDetail({ id, onBack }: CustomerDetailProps) {
             Link job
           </button>
         </div>
+      </section>
+
+      <section className="crm-section" aria-label="Change orders">
+        <div className="crm-section-head">
+          <h2>
+            <FileText size={17} />
+            Change orders
+          </h2>
+          {linkedRequests.length ? (
+            <span className="crm-badge">{linkedRequests.length}</span>
+          ) : null}
+        </div>
+        {linkedRequests.length ? (
+          <ul className="crm-job-list">
+            {linkedRequests.map((request) => (
+              <li key={request.id} className="crm-job">
+                <div className="crm-job-main">
+                  <strong>
+                    {request.job.jobNumber ||
+                      request.job.customer ||
+                      "Untitled change order"}
+                  </strong>
+                  <small>
+                    {[
+                      request.job.customer,
+                      new Date(request.updatedAt).toLocaleDateString(),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                  </small>
+                </div>
+                <span className="crm-badge">
+                  {REQUEST_LABELS[request.status] ?? request.status}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="crm-empty">
+            No change orders linked to this customer yet. Pick this customer on
+            the New request page and the change order appears here.
+          </p>
+        )}
       </section>
 
       <ActivityTimeline
