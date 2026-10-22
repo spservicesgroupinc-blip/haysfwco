@@ -1,6 +1,7 @@
 # CRM Features — Implementation Plan
 
-Status: approved for build (2026-10-22). Companion task list: `tasks/crm-todo.md`.
+Status: implemented (2026-10-22). Companion task list: `tasks/crm-todo.md`.
+Pending: manual redeploy of `apps-script/Code.gs` to the live Apps Script web app.
 The original `tasks/plan.md` / `tasks/todo.md` are intentionally left untouched.
 
 ## Scope (confirmed with user)

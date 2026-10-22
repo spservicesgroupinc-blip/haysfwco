@@ -45,6 +45,29 @@ Requests sync automatically to Google Sheets, and uploaded PDFs are stored in Go
 
 The parser supports positioned Final Draft tables, wrapped descriptions, repeated headers, and explicit RCV columns. It also reads right-aligned RESET / REMOVE / REPLACE / TAX / O&P / TOTAL reports, combining the printed per-unit prices into the editable unit price while keeping the printed TOTAL as the original RCV. Source price components stay available during review. Existing negative credit lines are preserved and can be revised or removed. Room sketches, trade headings, page footers, recap totals, depreciation, and ACV do not become priced work. PDFs vary; review extracted fields against the source before generation. Scanned PDFs and unsupported reports use manual entry. The app does not infer pricing-list rates, tax applicability, or O&P rules. A later change order must use the appropriate current estimate baseline; previously exported packets do not automatically update the baseline or previous authorized changes.
 
+## Customers (CRM)
+
+The **Customers** tab (`#/customers`) is a lightweight CRM built on a dedicated
+customer record, separate from the replaceable jobs directory:
+
+- Searchable customer directory with job count and open-task count.
+- Customer detail (`#/customers/:id`) with linked jobs (and their lifecycle
+  stage), an activity timeline, and follow-up tasks.
+- **Activity timeline** — notes plus logged calls, emails, texts, and meetings.
+- **Follow-up tasks** — due date, assignee, done toggle, overdue highlighting.
+- **Job lifecycle stages** — Lead → In progress → Complete → Closed.
+- **Merge** — fold one customer into another; activities and tasks move with it.
+
+CRM data is stored locally first (IndexedDB `hays-crm-v1`) and synced to the
+Apps Script backend. The backend adds three Sheets tabs (`Customers`,
+`CustomerActivities`, `Tasks`) and these actions: `listCustomers`,
+`openCustomer`, `saveCustomer`, `mergeCustomers`, `listActivities`,
+`addActivity`, `listTasks`, `saveTask`. Workspace saves also accept `stage` and
+`customerId`.
+
+> Deploy the updated `apps-script/Code.gs` (run `setup()` once) before CRM data
+> can sync across devices. Until then the app keeps changes on the device.
+
 ## Verification
 
 ```powershell

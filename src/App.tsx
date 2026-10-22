@@ -73,7 +73,7 @@ const JobsDocuments = lazy(() => import("./documents/JobsDocuments"));
 const RequestWorkspaceLink = lazy(
   () => import("./documents/RequestWorkspaceLink"),
 );
-import { startCrmSync } from "./crm";
+import { startCrmSync, syncCustomersFromJobs } from "./crm";
 const CustomerList = lazy(() => import("./components/crm/CustomerList"));
 const CustomerDetail = lazy(() => import("./components/crm/CustomerDetail"));
 
@@ -263,6 +263,11 @@ export default function App() {
       setRequests(data.requests);
       setJobs(data.jobs);
       setListError("");
+      // Keep the customer directory in step with the job directory, including
+      // jobs imported on another device. The offline seed list is not a report.
+      if (!data.jobsAreDemo) {
+        void syncCustomersFromJobs(data.jobs).catch(() => undefined);
+      }
     } catch (error) {
       setListError(error instanceof Error ? error.message : String(error));
     }
