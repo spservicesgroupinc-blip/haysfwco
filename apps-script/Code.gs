@@ -144,10 +144,9 @@ function doPost(e) {
 }
 
 const REQUEST_HEADERS = ["id", "revision", "createdAt", "updatedAt", "status", "estimatorName", "customer", "jobNumber", "projectManager", "orderNumber", "address", "changesCount", "attachmentsCount", "dataFileId", "previousDataFileId", "folderId", "workspaceId"];
-// contractAmount is appended last on purpose: a Jobs sheet deployed before the
-// column existed keeps every existing column aligned. jobsSheet_() backfills the
-// missing header cell instead of inserting or moving a column.
-const JOB_HEADERS = ["id", "jobNumber", "customer", "address", "projectManager", "estimator", "status", "customerPhone", "customerEmail", "active", "updatedAt", "contractAmount"];
+// New directory columns are appended so deployed sheets keep their existing
+// column positions. jobsSheet_() backfills headers without moving saved data.
+const JOB_HEADERS = ["id", "jobNumber", "customer", "address", "projectManager", "estimator", "status", "customerPhone", "customerEmail", "active", "updatedAt", "contractAmount", "carrier", "claim", "jobAddress", "city", "state", "zip", "secondaryEmail", "supervisor", "foreman", "dateInspected", "startDate", "finishDate"];
 // Script property recording the JOB_HEADERS.length that was last verified (or
 // healed) against the Jobs sheet. It gates the one-time header check, so
 // listJobs / bootstrap read only the job rows instead of the header row on every
@@ -218,12 +217,21 @@ function healJobHeaders_(sheet) {
   markJobHeaders_();
 }
 function jobRow_(v) {
-  return { id: String(v[0]), jobNumber: String(v[1] || ""), customer: String(v[2] || ""), address: String(v[3] || ""), projectManager: String(v[4] || ""), estimator: String(v[5] || ""), status: String(v[6] || ""), customerPhone: String(v[7] || ""), customerEmail: String(v[8] || ""), active: v[9] === true || String(v[9]).toLowerCase() === "true", updatedAt: String(v[10] || ""), contractAmount: String(v[JC.CONTRACT] || "") };
+  const job = { id: String(v[0]), jobNumber: String(v[1] || ""), customer: String(v[2] || ""), address: String(v[3] || ""), projectManager: String(v[4] || ""), estimator: String(v[5] || ""), status: String(v[6] || ""), customerPhone: String(v[7] || ""), customerEmail: String(v[8] || ""), active: v[9] === true || String(v[9]).toLowerCase() === "true", updatedAt: String(v[10] || ""), contractAmount: String(v[JC.CONTRACT] || "") };
+  JOB_HEADERS.slice(12).forEach(function(field, index) { job[field] = String(v[index + 12] || ""); });
+  return job;
 }
-function jobRows_() {
+function storedJobRows_() {
   const sheet = jobsSheet_(); const last = sheet.getLastRow();
   const rows = last < 2 ? [] : sheet.getRange(2, 1, last - 1, JOB_HEADERS.length).getValues();
   return rows.map(jobRow_);
+}
+function jobRows_() {
+  ensureCustomerReferenceSynced_();
+  return storedJobRows_();
+}
+function jobValues_(job) {
+  return JOB_HEADERS.map(function(field) { return field === "active" ? Boolean(job.active) : String(job[field] == null ? "" : job[field]); });
 }
 function listJobs_() {
   return json_({ ok: true, jobs: jobRows_() });
@@ -234,15 +242,17 @@ function importJobs_(body) {
   // so the client must always send the latest full report.
   if (!body || !Array.isArray(body.jobs)) problem_("VALIDATION", "A jobs array is required.");
   if (body.jobs.length > 5000) problem_("VALIDATION", "Too many jobs to import at once.");
+  ensureCustomerReferenceSynced_();
   return locked_(function () {
     const sheet = jobsSheet_();
     const now = new Date().toISOString();
     const values = body.jobs.map(function (job) {
-      return [String(job.id || ""), String(job.jobNumber || ""), String(job.customer || ""), String(job.address || ""), String(job.projectManager || ""), String(job.estimator || ""), String(job.status || ""), String(job.customerPhone || ""), String(job.customerEmail || ""), Boolean(job.active), String(job.updatedAt || now), String(job.contractAmount || "")];
+      return jobValues_(Object.assign({}, job, { updatedAt: job.updatedAt || now }));
     });
     const last = sheet.getLastRow();
     if (last > 1) sheet.getRange(2, 1, last - 1, JOB_HEADERS.length).clearContent();
     if (values.length) sheet.getRange(2, 1, values.length, JOB_HEADERS.length).setValues(values);
+    syncCustomersFromDirectory_(body.jobs, now);
     SpreadsheetApp.flush();
     return json_({ ok: true, jobs: body.jobs });
   });
@@ -653,9 +663,10 @@ function activityRow_(values) {
 }
 
 function listCustomers_() {
+  ensureCustomerReferenceSynced_();
   const customers = customerRows_().map(function(values) {
     const c = readCustomer_(values).customer;
-    return { id: c.id, name: c.name, phone: c.phone, email: c.email, address: c.address, tags: c.tags, jobCount: 0, openTaskCount: 0, updatedAt: c.updatedAt };
+    return { id: c.id, revision: c.revision, createdAt: c.createdAt, name: c.name, phone: c.phone, email: c.email, address: c.address, cityStateZip: c.cityStateZip, tags: c.tags, mergedFromIds: c.mergedFromIds, jobCount: 0, openTaskCount: 0, updatedAt: c.updatedAt };
   }).sort(function(a, b) { return String(b.updatedAt).localeCompare(String(a.updatedAt)); });
   return json_({ ok: true, customers: customers });
 }
@@ -1218,9 +1229,10 @@ function customerReferenceSheet_() {
   return ss.getSheetByName('CustomerReference') || ss.insertSheet('CustomerReference');
 }
 
-function getCustomerReference_() {
-  return locked_(function () {
-    var rows = customerReferenceSheet_().getDataRange().getValues();
+function readCustomerReference_() {
+    var ss = spreadsheet_();
+    var sheet = ss.getSheetByName('CustomerReference');
+    var rows = sheet ? sheet.getDataRange().getValues() : [];
     var metadata = rows.length > 1 && rows[1][1] ? JSON.parse(String(rows[1][1])) : {};
     var customers = [];
     for (var i = 1; i < rows.length; i++) {
@@ -1233,7 +1245,120 @@ function getCustomerReference_() {
       updatedBy: metadata.updatedBy || ''
       ,version: metadata.version || metadata.updatedAt || ''
     };
+}
+function getCustomerReference_() {
+  return locked_(readCustomerReference_);
+}
+
+// The CSV is shared directory data, never AI intake context. Version receipts
+// migrate existing uploads once and let failed imports resume on the next read.
+const CUSTOMER_REFERENCE_VERSION_KEY = "CUSTOMER_REFERENCE_VERSION";
+const CUSTOMER_DIRECTORY_SYNC_KEY = "CUSTOMER_DIRECTORY_SYNC_VERSION";
+function ensureCustomerReferenceSynced_() {
+  const props = PropertiesService.getScriptProperties();
+  const version = props.getProperty(CUSTOMER_REFERENCE_VERSION_KEY);
+  if (version && props.getProperty(CUSTOMER_DIRECTORY_SYNC_KEY) === version) return;
+  locked_(function() {
+    const current = props.getProperty(CUSTOMER_REFERENCE_VERSION_KEY);
+    if (current && props.getProperty(CUSTOMER_DIRECTORY_SYNC_KEY) === current) return;
+    const reference = readCustomerReference_();
+    const receipt = reference.version || "empty-directory-v1";
+    const now = reference.updatedAt || new Date().toISOString();
+    syncCustomerReferenceDirectory_(reference.customers, now);
+    props.setProperty(CUSTOMER_REFERENCE_VERSION_KEY, receipt);
+    props.setProperty(CUSTOMER_DIRECTORY_SYNC_KEY, receipt);
   });
+}
+function directoryKey_(value) { return String(value || "").trim().toLowerCase().replace(/\s+/g, " "); }
+function directoryJobKey_(value) { return String(value || "").trim().toUpperCase(); }
+function syncCustomerReferenceDirectory_(references, now) {
+  const jobs = storedJobRows_();
+  const byNumber = Object.create(null);
+  const incoming = Object.create(null);
+  references.forEach(function(reference) { incoming[directoryJobKey_(reference.jobNumber)] = true; });
+  jobs.forEach(function(job) {
+    if (references.length && /^csv-job-/.test(job.id) && !incoming[directoryJobKey_(job.jobNumber)]) job.active = false;
+  });
+  jobs.forEach(function(job, index) { const key = directoryJobKey_(job.jobNumber); if (key) byNumber[key] = index; });
+  references.forEach(function(reference) {
+    const key = directoryJobKey_(reference.jobNumber);
+    if (!key || !String(reference.customerName || "").trim()) return;
+    const index = byNumber[key];
+    const existing = index === undefined ? {} : jobs[index];
+    const job = Object.assign({}, existing);
+    job.id = existing.id || "csv-job-" + integrationDigest_(key).slice(0, 32);
+    job.jobNumber = String(reference.jobNumber).trim();
+    job.customer = String(reference.customerName).trim();
+    const locality = [reference.city, reference.state, reference.zip].filter(Boolean).join(" ");
+    const address = [reference.jobAddress, locality].filter(Boolean).join(", ");
+    if (address) job.address = address;
+    ["customerPhone", "customerEmail", "projectManager", "estimator", "status", "carrier", "claim", "jobAddress", "city", "state", "zip", "secondaryEmail", "supervisor", "foreman", "dateInspected", "startDate", "finishDate"].forEach(function(field) {
+      const value = String(reference[field] || "").trim();
+      if (value) job[field] = value;
+    });
+    if (typeof reference.contractPrice === "number" && isFinite(reference.contractPrice)) job.contractAmount = reference.contractPrice.toFixed(2);
+    job.status = job.status || "Active";
+    job.active = !["closed", "cancelled", "canceled", "inactive", "archived"].includes(job.status.toLowerCase());
+    job.updatedAt = now;
+    if (index === undefined) { byNumber[key] = jobs.length; jobs.push(job); } else jobs[index] = job;
+  });
+  // Directory imports never rewrite the permanent Workspaces/JobDocuments tabs.
+  if (references.length && jobs.length) jobsSheet_().getRange(2, 1, jobs.length, JOB_HEADERS.length).setValues(jobs.map(jobValues_));
+  syncCustomersFromDirectory_(jobs, now);
+  SpreadsheetApp.flush();
+}
+function syncCustomersFromDirectory_(jobs, now) {
+  if (!jobs.length) return;
+  const sheet = customersSheet_();
+  const rows = integrationRows_(sheet, CUSTOMER_HEADERS.length);
+  const entries = [];
+  const byName = Object.create(null);
+  rows.forEach(function(values, index) {
+    if (!values[CC.ID]) return;
+    const envelope = readCustomer_(values);
+    const entry = { index: index, envelope: envelope, original: JSON.stringify(envelope.customer) };
+    entries.push(entry);
+    const key = directoryKey_(envelope.customer.name);
+    if (!byName[key]) byName[key] = [];
+    byName[key].push(entry);
+  });
+  jobs.forEach(function(job) {
+    const name = String(job.customer || "").trim();
+    const key = directoryKey_(name); if (!key) return;
+    const matches = byName[key] || [];
+    let entry = matches.length === 1 ? matches[0] : null;
+    if (matches.length > 1) {
+      const exact = matches.filter(function(candidate) {
+        const customer = candidate.envelope.customer;
+        return (job.customerEmail && directoryKey_(job.customerEmail) === directoryKey_(customer.email)) ||
+          (job.customerPhone && String(job.customerPhone).replace(/\D/g, "") === String(customer.phone || "").replace(/\D/g, "")) ||
+          (job.address && directoryKey_(job.address) === directoryKey_(customer.address));
+      });
+      // Ambiguous existing customers remain separate for a person to resolve.
+      if (exact.length !== 1) return;
+      entry = exact[0];
+    }
+    if (!entry) {
+      entry = { index: rows.length, envelope: { customer: { id: "csv-customer-" + integrationDigest_(key).slice(0, 32), name: name, revision: 0, createdAt: now, updatedAt: now }, mutations: {} }, original: "" };
+      rows.push([]); entries.push(entry); byName[key] = [entry];
+    }
+    const customer = entry.envelope.customer;
+    const details = { phone: job.customerPhone, email: job.customerEmail, address: job.address, cityStateZip: [job.city, job.state, job.zip].filter(Boolean).join(" ") };
+    Object.keys(details).forEach(function(field) {
+      const value = String(details[field] || "").trim();
+      if (!String(customer[field] || "").trim() && value) customer[field] = value;
+    });
+  });
+  let changed = false;
+  entries.forEach(function(entry) {
+    const customer = entry.envelope.customer;
+    if (JSON.stringify(customer) === entry.original) return;
+    customer.revision = (Number(customer.revision) || 0) + 1;
+    customer.updatedAt = now;
+    rows[entry.index] = [customer.id, customer.name, customer.phone || "", customer.email || "", now, crmData_(entry.envelope, "The customer record")];
+    changed = true;
+  });
+  if (changed) sheet.getRange(2, 1, rows.length, CUSTOMER_HEADERS.length).setValues(rows);
 }
 
 function replaceCustomerReference_(payload) {
@@ -1260,11 +1385,12 @@ function replaceCustomerReference_(payload) {
     if (seen[key]) throw intakeError_('bad_request', 'Duplicate job number: ' + number);
     seen[key] = true;
     var record = { customerName: name, jobNumber: number, contractPrice: price };
-    var limits = { jobAddress: 500, city: 100, state: 100, zip: 20 };
+    var limits = { jobAddress: 500, city: 100, state: 100, zip: 20, customerPhone: 100, customerEmail: 300, projectManager: 300, estimator: 300, status: 100, carrier: 300, claim: 300, secondaryEmail: 300, supervisor: 300, foreman: 300, dateInspected: 100, startDate: 100, finishDate: 100 };
     Object.keys(limits).forEach(function (field) {
-      if (item[field] !== undefined && typeof item[field] !== 'string') throw intakeError_('bad_request', 'Invalid address field.');
-      record[field] = (item[field] || '').trim();
-      if (record[field].length > limits[field]) throw intakeError_('bad_request', 'Address field is too long.');
+      if (item[field] !== undefined && typeof item[field] !== 'string') throw intakeError_('bad_request', 'Invalid customer information field.');
+      var value = (item[field] || '').trim();
+      if (value.length > limits[field]) throw intakeError_('bad_request', 'Customer information field is too long.');
+      if (value || ['jobAddress', 'city', 'state', 'zip'].indexOf(field) >= 0) record[field] = value;
     });
     return record;
   });
@@ -1279,7 +1405,14 @@ function replaceCustomerReference_(payload) {
     var rowCount = Math.max(rows.length, sheet.getLastRow());
     while (rows.length < rowCount) rows.push(['', '']);
     if (rowCount > sheet.getMaxRows()) sheet.insertRowsAfter(sheet.getMaxRows(), rowCount - sheet.getMaxRows());
+    const props = PropertiesService.getScriptProperties();
+    // Invalidate before writing so a failure between the snapshot write and its
+    // version receipt can still be repaired by the next directory read.
+    props.setProperty(CUSTOMER_DIRECTORY_SYNC_KEY, "");
     sheet.getRange(1, 1, rows.length, 2).setValues(rows);
+    props.setProperty(CUSTOMER_REFERENCE_VERSION_KEY, metadata.version);
+    syncCustomerReferenceDirectory_(customers, metadata.updatedAt);
+    props.setProperty(CUSTOMER_DIRECTORY_SYNC_KEY, metadata.version);
     return { customers: customers, fileName: metadata.fileName, updatedAt: metadata.updatedAt, updatedBy: metadata.updatedBy, version: metadata.version };
   });
 }

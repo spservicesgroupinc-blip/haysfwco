@@ -113,6 +113,13 @@ test("re-running the sync after another refresh adds nothing", async () => {
   assert.equal((await listCustomers()).length, 2);
 });
 
+test("cached uploads defer new contacts until shared customer IDs can be checked", async () => {
+  await resetDatabases();
+  const result = await syncCustomersFromJobs([job()], true);
+  assert.equal(result.created.length, 0);
+  assert.equal((await listCustomers()).length, 0);
+});
+
 test("job details fill blanks without overwriting entered contact info", async () => {
   await resetDatabases();
   const customer = await createCustomer({

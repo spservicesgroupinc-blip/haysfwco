@@ -9,6 +9,29 @@ import {
 } from "../src/workspaces/model";
 import { createRequest } from "../src/services/requests";
 import { priorChangeSummary } from "../src/services/changeOrder";
+import type { JobEntry } from "../src/types";
+
+test("CSV directory details carry location and insurance into job documents and requests", () => {
+  const entry: JobEntry = {
+    id: "csv-1", jobNumber: "FW-CSV-1", customer: "CSV Customer",
+    address: "10 Test St, Indianapolis, IN 46201", jobAddress: "10 Test St",
+    city: "Indianapolis", state: "IN", zip: "46201",
+    customerPhone: "317-555-0100", customerEmail: "csv@example.test",
+    projectManager: "CSV Manager", estimator: "CSV Estimator",
+    carrier: "CSV Carrier", claim: "CLAIM-1", contractAmount: "0.00",
+    status: "Active", active: true, updatedAt: "",
+  };
+  const workspace = workspaceFromDirectory(entry);
+  assert.equal(workspace.record.customer.mailingAddress, "");
+  assert.equal(workspace.record.customer.mailingCityStateZip, "");
+  assert.equal(workspace.record.customer.lossAddress, entry.address);
+  assert.equal(workspace.record.insurance.carrier, entry.carrier);
+  assert.equal(workspace.record.insurance.claimNumber, entry.claim);
+  const request = requestFromWorkspace(workspace);
+  assert.equal(request.job.carrier, "CSV Carrier");
+  assert.equal(request.job.claim, "CLAIM-1");
+  assert.equal(request.job.originalContract, "0.00");
+});
 
 test("job workspaces keep RCV separate from the original contract and preserve explicit zero", () => {
   const workspace = createWorkspace();

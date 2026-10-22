@@ -12,12 +12,17 @@ import {
 import { CustomerData, RestorationJobData } from '../types/jobData';
 import { DOC } from '../services/documentCatalog';
 import { SectionPdfActions, type PdfPreviewRequest } from './SectionPdfActions';
+import type { JobEntry } from '../../types';
+import { DirectoryJobPicker } from './DirectoryJobPicker';
 
 interface SectionCustomerProps {
   data: CustomerData;
   jobData: RestorationJobData;
   onPreview: PdfPreviewRequest;
   onChange: (field: keyof CustomerData, value: string) => void;
+  directory?: JobEntry[];
+  onSelectDirectory?: (entry: JobEntry) => void;
+  directoryDisabled?: boolean;
 }
 
 const INPUT_CLASS =
@@ -78,6 +83,9 @@ export const SectionCustomer: React.FC<SectionCustomerProps> = ({
   jobData,
   onPreview,
   onChange,
+  directory,
+  onSelectDirectory,
+  directoryDisabled,
 }) => {
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-3 sm:p-5">
@@ -92,6 +100,21 @@ export const SectionCustomer: React.FC<SectionCustomerProps> = ({
           </p>
         </div>
       </div>
+
+      {directory && onSelectDirectory && (
+        <details className="mb-5 border-b border-slate-100 pb-4">
+          <summary className="text-[13px] font-medium text-slate-700 cursor-pointer">
+            Autofill from jobs &amp; customers
+          </summary>
+          <div className="mt-3">
+            <DirectoryJobPicker
+              jobs={directory}
+              onSelect={onSelectDirectory}
+              disabled={directoryDisabled}
+            />
+          </div>
+        </details>
+      )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-4 gap-y-5">
         <Field

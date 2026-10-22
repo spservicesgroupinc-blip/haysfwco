@@ -64,20 +64,20 @@ export function CustomerImportPage({ canImport, onOpenIntake }: { canImport: boo
       const latest = await replaceCustomerReference(preview.customers, preview.fileName);
       if (!mounted.current) return;
       setSnapshot(latest); setPreview(null); setSearch('');
-      setMessage(`Saved ${latest.customers.length} customers for all users and devices. The previous CSV reference data was replaced.`);
+      setMessage(`Saved ${latest.customers.length} customer/job rows. Autofill is ready in Quick Requests and Jobs & Documents; customer contacts are syncing in the background. The previous CSV was replaced.`);
     } catch (err) {
       if (mounted.current) setError(err instanceof Error ? err.message : 'Could not save the customer knowledge base.');
     } finally { if (mounted.current) setSaving(false); }
   };
 
   const query = search.trim().toLowerCase();
-  const visible = (preview?.customers ?? snapshot?.customers ?? []).filter(customer => !query || `${customer.customerName} ${customer.jobNumber}`.toLowerCase().includes(query));
+  const visible = (preview?.customers ?? snapshot?.customers ?? []).filter(customer => !query || `${customer.customerName} ${customer.jobNumber} ${customer.jobAddress} ${customer.city} ${customer.state} ${customer.zip} ${customer.customerPhone || ''} ${customer.customerEmail || ''}`.toLowerCase().includes(query));
   return (
     <section className="rounded-xl border border-slate-200 bg-white" aria-label="Customer Knowledge Base">
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 p-4 sm:p-5">
         <div>
           <h2 className="text-lg font-semibold text-slate-900">Customer Knowledge Base</h2>
-          <p className="mt-1 max-w-2xl text-sm text-slate-600">Upload a customer CSV to keep shared reference information for estimate review: customer names, job numbers, contract prices, and property addresses. This reference list is separate from your job directory and saved jobs.</p>
+          <p className="mt-1 max-w-2xl text-sm text-slate-600">Upload your customer database once to search customers and jobs throughout the app. Select a match to fill job details, contact information, contract amounts, team members, and insurance details when available.</p>
         </div>
         <button type="button" onClick={() => void refresh()} disabled={loading || saving || reading} className={buttonClass}>
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} aria-hidden /> Refresh shared list
@@ -87,7 +87,7 @@ export function CustomerImportPage({ canImport, onOpenIntake }: { canImport: boo
         <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Each saved upload replaces the entire shared customer knowledge base for all users and devices. Saved jobs and documents are kept.</p>
         <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4">
           <label htmlFor="customer-csv-upload" className="block text-sm font-semibold text-slate-900">Choose customer CSV</label>
-          <p id="customer-csv-help" className="mt-1 text-sm text-slate-600">Required columns: Customer or Customer Name, Job Number, and Contract Price or Estimate Amount. Up to 5,000 rows and 10 MB. Job Address, Loss City, Loss State, and Loss ZIP are also saved when present. The saved list must fit within 100 KB.</p>
+          <p id="customer-csv-help" className="mt-1 text-sm text-slate-600">Required columns: Customer or Customer Name, and Job Number. Optional columns include Contract Price or Estimate Amount, Job Address, City, State, ZIP, Customer Main Phone, Customer Email, Project Manager, Estimator, Supervisor, and ForePerson. Up to 5,000 rows and 10 MB; the saved list must fit within 100 KB.</p>
           <input id="customer-csv-upload" type="file" accept=".csv,text/csv" onChange={readCsv} disabled={!canImport || loading || reading || saving} aria-describedby="customer-csv-help" className="mt-3 block min-h-11 w-full min-w-0 text-sm text-slate-700 file:mr-3 file:rounded-lg file:border-0 file:bg-white file:px-4 file:py-3 file:font-semibold file:text-red-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-600 disabled:opacity-50" />
           {!canImport && <p className="mt-2 text-sm text-slate-600">An editor or administrator can replace this shared list.</p>}
         </div>

@@ -1,7 +1,7 @@
 import type { JobEntry } from "../types";
 import { saveWorkspaceLocally } from "../services/workspaces";
 import { readWorkspaceRows } from "../workspaces/localStore";
-import { stageCustomers } from "./sync";
+import { refreshCustomersFromServer, stageCustomers } from "./sync";
 import { listLocalCustomers } from "./store";
 import type { Customer } from "./types";
 
@@ -34,10 +34,11 @@ export interface JobCustomerSyncResult {
  */
 export function syncCustomersFromJobs(
   jobs: JobEntry[],
+  requireSharedDirectory = false,
 ): Promise<JobCustomerSyncResult> {
   const queued = queue.then(
-    () => runJobCustomerSync(jobs),
-    () => runJobCustomerSync(jobs),
+    () => runJobCustomerSync(jobs, requireSharedDirectory),
+    () => runJobCustomerSync(jobs, requireSharedDirectory),
   );
   queue = queued.catch(() => undefined);
   return queued;
@@ -47,6 +48,7 @@ let queue: Promise<unknown> = Promise.resolve();
 
 async function runJobCustomerSync(
   jobs: JobEntry[],
+  requireSharedDirectory: boolean,
 ): Promise<JobCustomerSyncResult> {
   const result: JobCustomerSyncResult = {
     created: [],
@@ -57,6 +59,9 @@ async function runJobCustomerSync(
     (job) => job && customerNameKey(job.customer),
   );
 
+  // Imports can already have created shared CRM records on the server. Hydrate
+  // those IDs before staging local additions, including on a brand-new device.
+  const hydrated = await refreshCustomersFromServer().then(() => true, () => false);
   const customers = await listLocalCustomers();
   const byName = new Map<string, Customer>();
   for (const customer of customers) {
@@ -80,6 +85,9 @@ async function runJobCustomerSync(
     let customer: Customer;
 
     if (!existing) {
+      // A cached CSV can be read offline, but shared customer IDs must be
+      // checked before creating contacts that another device already owns.
+      if (requireSharedDirectory && !hydrated) continue;
       const now = new Date().toISOString();
       customer = {
         id: crypto.randomUUID(),

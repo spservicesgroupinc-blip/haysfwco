@@ -38,13 +38,23 @@ export function workspaceFromDirectory(entry: JobEntry): Workspace {
     jobNumber: entry.jobNumber,
     customerName: entry.customer,
     lossAddress: entry.address,
+    mailingCityStateZip: "",
     mainPhone: entry.customerPhone,
     email: entry.customerEmail,
   });
   Object.assign(workspace.record.team, {
     projectManager: entry.projectManager,
     estimator: entry.estimator,
+    supervisor: entry.supervisor || workspace.record.team.supervisor,
+    foreman: entry.foreman || workspace.record.team.foreman,
   });
+  Object.assign(workspace.record.insurance, {
+    carrier: entry.carrier || "",
+    claimNumber: entry.claim || "",
+    dateInspected: entry.dateInspected || "",
+  });
+  workspace.record.checklist.startDate = entry.startDate || "";
+  workspace.record.checklist.finishDate = entry.finishDate || "";
   workspace.originalContract = entry.contractAmount;
   return workspace;
 }

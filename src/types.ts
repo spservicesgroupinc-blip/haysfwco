@@ -102,6 +102,19 @@ export interface JobEntry {
   jobNumber: string;
   customer: string;
   address: string;
+  /** Structured loss/property location retained from the CSV, when provided. */
+  jobAddress?: string;
+  city?: string;
+  state?: string;
+  zip?: string;
+  carrier?: string;
+  claim?: string;
+  secondaryEmail?: string;
+  supervisor?: string;
+  foreman?: string;
+  dateInspected?: string;
+  startDate?: string;
+  finishDate?: string;
   projectManager: string;
   estimator: string;
   status: string;

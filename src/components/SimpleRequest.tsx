@@ -174,6 +174,9 @@ function buildRequest(
       address: details.job?.address ?? "",
       jobNumber: details.job?.jobNumber ?? "",
       projectManager: details.job?.projectManager ?? "",
+      branchContact: details.job?.estimator || request.job.branchContact,
+      carrier: details.job?.carrier ?? request.job.carrier,
+      claim: details.job?.claim ?? request.job.claim,
       // Only copy the directory's contract amount when it carries one, so a
       // blank entry never wipes an amount the request already holds.
       ...(details.job?.contractAmount
@@ -285,6 +288,8 @@ export default function SimpleRequest(
         address: initialRequest.job.address,
         projectManager: initialRequest.job.projectManager,
         estimator: initialRequest.job.branchContact,
+        carrier: initialRequest.job.carrier,
+        claim: initialRequest.job.claim,
         status: "Active",
         customerPhone: initialRequest.job.customerPhone || "",
         customerEmail: initialRequest.job.customerEmail || "",
