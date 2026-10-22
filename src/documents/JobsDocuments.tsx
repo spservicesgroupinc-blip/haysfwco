@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import { FileText, Plus, Search, Upload } from "lucide-react";
 import type { ChangeRequest, JobEntry, RequestSummary } from "../types";
 import type { WorkspaceRow } from "../workspaces/types";
@@ -15,10 +15,21 @@ import {
 } from "../services/workspaces";
 import { syncWorkspaces } from "../services/workspaces";
 import { importWorkspaceLocally } from "../workspaces/importStore";
-import { syncCustomersFromJobs } from "../crm";
+import {
+  listCustomers,
+  subscribeCrm,
+  syncCustomersFromJobs,
+  type CustomerSummary,
+} from "../crm";
+import {
+  customerIdForPick,
+  customerIdOfOption,
+  customerOptions,
+} from "../services/customerDirectory";
 import JobWorkspace from "./JobWorkspace";
 import { CustomerImportPage } from "./components/CustomerImportPage";
 import WorkspaceMigration from "./WorkspaceMigration";
+import { DirectoryJobPicker } from "./components/DirectoryJobPicker";
 import "./workspace.css";
 import "./documents.css";
 
@@ -41,13 +52,29 @@ export default function JobsDocuments({
   onOpenRequest: (id: string) => void;
   onBack: () => void;
 }) {
-  const directorySelectId = useId();
+  const [customers, setCustomers] = useState<CustomerSummary[]>([]);
   const [rows, setRows] = useState<WorkspaceRow[]>([]);
   const [search, setSearch] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [tool, setTool] = useState<"jobs" | "migration" | "reference">("jobs");
   useEffect(() => setTool(initialTool || "jobs"), [initialTool]);
+  useEffect(() => {
+    let active = true;
+    const read = () =>
+      void listCustomers()
+        .then((value) => {
+          if (active) setCustomers(value);
+        })
+        .catch(() => undefined);
+    read();
+    const unsubscribe = subscribeCrm(read);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+  const directory = [...jobs, ...customerOptions(jobs, customers)];
   useEffect(() => {
     let active = true;
     const read = async () => {
@@ -95,9 +122,16 @@ export default function JobsDocuments({
       const workspace = entry
         ? workspaceFromDirectory(entry)
         : createWorkspace();
+      if (entry)
+        workspace.customerId = customerIdForPick(
+          entry,
+          customers,
+          entry.customer,
+        );
       await saveWorkspaceLocally(workspace);
       // Opening a job from the directory registers its customer and links it.
-      if (entry) await syncCustomersFromJobs([entry]).catch(() => undefined);
+      if (entry && !customerIdOfOption(entry.id))
+        await syncCustomersFromJobs([entry], true).catch(() => undefined);
       onOpenWorkspace(workspace.id);
     } catch (value) {
       setError(value instanceof Error ? value.message : String(value));
@@ -112,6 +146,8 @@ export default function JobsDocuments({
         key={workspaceId}
         id={workspaceId}
         requests={requests}
+        jobs={directory}
+        customers={customers}
         onNewRequest={onNewRequest}
         onOpenRequest={onOpenRequest}
         onBack={onBack}
@@ -149,7 +185,13 @@ export default function JobsDocuments({
           New job
         </button>
       </div>
-      {tool !== "jobs" && <div className="workspace-tools"><button className="button" onClick={()=>setTool("jobs")}>Back to saved jobs</button></div>}
+      {tool !== "jobs" && (
+        <div className="workspace-tools">
+          <button className="button" onClick={() => setTool("jobs")}>
+            Back to saved jobs
+          </button>
+        </div>
+      )}
 
       {error && (
         <div className="notice danger" role="alert">
@@ -239,39 +281,16 @@ export default function JobsDocuments({
             )}
           </section>
           <details className="workspace-panel directory-disclosure">
-            <summary>Start from the job directory</summary>
+            <summary>Start from jobs &amp; customers</summary>
             <p>
               Choose an imported job to start its workspace. Future directory
               imports preserve your saved details and documents.
             </p>
-            <div className="workspace-directory-select">
-              <label htmlFor={directorySelectId}>Directory job</label>
-              <select
-                id={directorySelectId}
-                value=""
-                disabled={busy}
-                onChange={(event) => {
-                  const entry = jobs.find(
-                    (job) => job.id === event.target.value,
-                  );
-                  if (entry) void create(entry);
-                }}
-              >
-                <option value="">Choose a job…</option>
-                {jobs
-                  .filter((job) => job.active)
-                  .map((job) => (
-                    <option key={job.id} value={job.id}>
-                      {job.customer} · {job.jobNumber}
-                    </option>
-                  ))}
-              </select>
-            </div>
-            {!jobs.length && (
-              <p>
-                No directory jobs imported yet. You can create a job manually.
-              </p>
-            )}
+            <DirectoryJobPicker
+              jobs={directory}
+              disabled={busy}
+              onSelect={(entry) => void create(entry)}
+            />
           </details>
         </>
       )}

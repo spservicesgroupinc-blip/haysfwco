@@ -2,7 +2,8 @@ import { useRef, useState } from "react";
 import { CheckCircle2, FileSpreadsheet, ListChecks, Upload, X } from "lucide-react";
 import type { JobEntry } from "../types";
 import { parseJobReport, type JobImportResult } from "../services/jobImport";
-import { importJobs } from "../services/storage";
+import { replaceCustomerReference } from "../documents/services/customerReferenceService";
+import { customerReferenceJobs, jobsToCustomerReferences } from "../services/customerReferenceJobs";
 import { syncCustomersFromJobs } from "../crm";
 import "./AdminJobs.css";
 
@@ -13,6 +14,7 @@ export interface AdminJobsProps {
 
 export default function AdminJobs({ jobs, onImported }: AdminJobsProps) {
   const [csvText, setCsvText] = useState("");
+  const [fileName, setFileName] = useState("Job Summary CSV");
   const [preview, setPreview] = useState<JobImportResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -36,6 +38,7 @@ export default function AdminJobs({ jobs, onImported }: AdminJobsProps) {
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    setFileName(file.name);
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = String(event.target?.result || "");
@@ -50,11 +53,12 @@ export default function AdminJobs({ jobs, onImported }: AdminJobsProps) {
     setBusy(true);
     setError("");
     try {
-      const imported = await importJobs(preview.jobs);
+      const snapshot = await replaceCustomerReference(jobsToCustomerReferences(preview.jobs), fileName);
+      const imported = customerReferenceJobs(snapshot);
       onImported(imported);
       // The uploaded jobs are the customer list: every customer on the report
       // becomes a customer record (or fills in the details it was missing).
-      const synced = await syncCustomersFromJobs(imported).catch(() => null);
+      const synced = await syncCustomersFromJobs(imported, true).catch(() => null);
       const added = synced?.created.length ?? 0;
       const filled = synced?.updated.length ?? 0;
       setSuccess(
@@ -81,7 +85,7 @@ export default function AdminJobs({ jobs, onImported }: AdminJobsProps) {
           <h1>Import jobs for auto-complete</h1>
           <p>
             Upload or paste your Dash Job Summary CSV so project managers can
-            instantly search and auto-complete jobs when creating quick requests.
+            search customers and auto-fill Quick Requests and job documents.
           </p>
         </div>
         <div className="admin-jobs-count">

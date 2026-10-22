@@ -9,7 +9,9 @@ import {
   RefreshCw,
   Save,
 } from "lucide-react";
-import type { ChangeRequest, RequestSummary } from "../types";
+import type { ChangeRequest, JobEntry, RequestSummary } from "../types";
+import type { CustomerSummary } from "../crm/types";
+import { customerIdForPick } from "../services/customerDirectory";
 import type { Workspace, WorkspaceRow, DocumentRow } from "../workspaces/types";
 import {
   requestFromWorkspace,
@@ -56,6 +58,7 @@ import {
 } from "./services/pdfService";
 import { getPdfFieldSchema } from "./services/pdfFieldSchema";
 import { getMissingJobFields } from "./services/jobReadiness";
+import { fillWorkspaceFromDirectory } from "./services/directoryAutofill";
 import type { ProvenanceRecord } from "./services/intakeParser";
 import type { RestorationJobData } from "./types/jobData";
 import "./workspace.css";
@@ -84,25 +87,39 @@ function Section({
 export default function JobWorkspace({
   id,
   requests,
+  jobs = [],
+  customers = [],
   onNewRequest,
   onOpenRequest,
   onBack,
 }: {
   id: string;
   requests: RequestSummary[];
+  jobs?: JobEntry[];
+  customers?: CustomerSummary[];
   onNewRequest: (request: ChangeRequest) => void;
   onOpenRequest: (id: string) => void;
   onBack: () => void;
 }) {
   const packetSelectId = useId();
-  const [focusField,setFocusField]=useState("");
-  useEffect(()=>{
-    if(!focusField)return;
-    const frame=requestAnimationFrame(()=>{
-      const input=document.getElementById(focusField);
-      if(input){let parent=input.parentElement;while(parent){if(parent instanceof HTMLDetailsElement)parent.open=true;parent=parent.parentElement;}input.scrollIntoView({block:"center"});input.focus({preventScroll:true});setFocusField("");}
-    });return()=>cancelAnimationFrame(frame);
-  },[focusField]);
+  const [focusField, setFocusField] = useState("");
+  useEffect(() => {
+    if (!focusField) return;
+    const frame = requestAnimationFrame(() => {
+      const input = document.getElementById(focusField);
+      if (input) {
+        let parent = input.parentElement;
+        while (parent) {
+          if (parent instanceof HTMLDetailsElement) parent.open = true;
+          parent = parent.parentElement;
+        }
+        input.scrollIntoView({ block: "center" });
+        input.focus({ preventScroll: true });
+        setFocusField("");
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusField]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const current = useRef<Workspace | null>(null);
   const [row, setRow] = useState<WorkspaceRow>();
@@ -401,9 +418,7 @@ export default function JobWorkspace({
       openRequest,
       frozen.previousChanges,
     );
-    onNewRequest(
-      requestFromWorkspace(frozen, undefined, prior ?? undefined),
-    );
+    onNewRequest(requestFromWorkspace(frozen, undefined, prior ?? undefined));
   }
 
   async function resolveConflict(choice: "device" | "server") {
@@ -527,7 +542,25 @@ export default function JobWorkspace({
         </div>
       )}
       {busy && <p role="status">{busy}</p>}
-      {missing.length>0 && <div className="workspace-missing"><strong>Job details to complete</strong><div>{missing.map(field=><button className="text-button" key={field.inputId} onClick={()=>{setTab("details");setFocusField(field.inputId);}}>{field.label} ?</button>)}</div></div>}
+      {missing.length > 0 && (
+        <div className="workspace-missing">
+          <strong>Job details to complete</strong>
+          <div>
+            {missing.map((field) => (
+              <button
+                className="text-button"
+                key={field.inputId}
+                onClick={() => {
+                  setTab("details");
+                  setFocusField(field.inputId);
+                }}
+              >
+                {field.label} ?
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <nav className="workspace-tabs" aria-label="Job sections">
         {(
           [
@@ -554,6 +587,29 @@ export default function JobWorkspace({
             <SectionCustomer
               data={data.customer}
               jobData={data}
+              directory={jobs}
+              directoryDisabled={!!busy || deviceSaving}
+              onSelectDirectory={(entry) => {
+                try {
+                  if (!current.current) return;
+                  const next = fillWorkspaceFromDirectory(
+                    current.current,
+                    entry,
+                  );
+                  if (!next.customerId)
+                    next.customerId = customerIdForPick(
+                      entry,
+                      customers,
+                      entry.customer,
+                    );
+                  change(next);
+                  setNotice(
+                    "Available directory details filled in. Existing details were preserved; review the job before generating documents.",
+                  );
+                } catch (value) {
+                  setError(textOf(value));
+                }
+              }}
               onPreview={(template) =>
                 setPreview({
                   template,

@@ -249,6 +249,11 @@ export function cachedJobDirectory(): JobEntry[] {
   }
 }
 
+/** Cache shared lookup rows for offline pickers and customer job counts. */
+export function cacheJobDirectory(jobs: JobEntry[]): void {
+  saveLocalJobs(jobs);
+}
+
 function getLocalAttachment(attachmentId: string): { name: string; mimeType: string; data: string } | null {
   try {
     const raw = localStorage.getItem(`${STORAGE_KEY_ATTACHMENTS}_${attachmentId}`);

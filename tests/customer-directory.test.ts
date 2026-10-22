@@ -101,3 +101,10 @@ test("a typed customer name links to the loaded customer record", () => {
   assert.equal(customerIdForPick(null, [customer()], "Someone Else"), undefined);
   assert.equal(customerIdForPick(null, [customer()], ""), undefined);
 });
+
+test("an ambiguous customer name needs an explicit customer pick", () => {
+  const customers = [customer(), customer({ id: "cust-2", email: "other@example.test" })];
+  assert.equal(customerIdForPick(null, customers, "York Ridge Apartments"), undefined);
+  assert.equal(customerIdForPick(job(), customers, ""), undefined);
+  assert.equal(customerIdForPick(job({ id: customerOptionId("cust-2") }), customers, ""), "cust-2");
+});

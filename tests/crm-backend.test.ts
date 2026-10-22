@@ -103,7 +103,10 @@ test("mergeCustomers reassigns activities and tasks and removes the source", () 
   assert.equal(tasks.length, 2);
   assert.ok(tasks.every((t: any) => t.customerId === "customer-a"));
   assert.equal(backend.post({ action: "openCustomer", customerId: "customer-b" }).ok, false);
-  assert.equal(backend.post({ action: "listCustomers" }).customers.length, 1);
+  const summaries = backend.post({ action: "listCustomers" }).customers;
+  assert.equal(summaries.length, 1);
+  assert.equal(summaries[0].revision, merged.customer.revision);
+  assert.deepEqual(summaries[0].mergedFromIds, ["customer-b"]);
 });
 
 test("activities append, dedupe on retry, and sort newest first", () => {

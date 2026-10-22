@@ -145,16 +145,16 @@ export async function refreshCustomersFromServer(): Promise<void> {
     const existing = await getLocalCustomer(summary.id);
     const merged: Customer = {
       id: summary.id,
-      revision: existing?.revision ?? 0,
-      createdAt: existing?.createdAt ?? summary.updatedAt,
+      revision: summary.revision ?? existing?.revision ?? 0,
+      createdAt: summary.createdAt ?? existing?.createdAt ?? summary.updatedAt,
       updatedAt: summary.updatedAt,
       name: summary.name,
       phone: summary.phone,
       email: summary.email,
       address: summary.address,
-      cityStateZip: existing?.cityStateZip,
+      cityStateZip: summary.cityStateZip ?? existing?.cityStateZip,
       tags: summary.tags,
-      mergedFromIds: existing?.mergedFromIds,
+      mergedFromIds: summary.mergedFromIds ?? existing?.mergedFromIds,
     };
     await putCustomerSilent(merged);
   }

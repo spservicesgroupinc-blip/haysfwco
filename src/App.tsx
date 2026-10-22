@@ -34,6 +34,7 @@ import {
 import { createRequestedChange } from "./services/requests";
 import {
   claimRequest,
+  cacheJobDirectory,
   deleteRequest,
   fetchAttachment,
   loadDashboard,
@@ -74,6 +75,10 @@ const RequestWorkspaceLink = lazy(
   () => import("./documents/RequestWorkspaceLink"),
 );
 import { startCrmSync, syncCustomersFromJobs } from "./crm";
+import { CUSTOMER_REFERENCE_CHANGED, getCachedCustomerReference, getCustomerReference } from "./documents/services/customerReferenceService";
+import type { CustomerReferenceSnapshot } from "./documents/services/customerReference";
+import { customerReferenceJobs } from "./services/customerReferenceJobs";
+import { sharedJobDirectory } from "./services/sharedJobDirectory";
 const CustomerList = lazy(() => import("./components/crm/CustomerList"));
 const CustomerDetail = lazy(() => import("./components/crm/CustomerDetail"));
 
@@ -190,7 +195,11 @@ function AttachmentPreview({
 export default function App() {
   const [view, setViewState] = useState<View>(initialView);
   const [requests, setRequests] = useState<RequestSummary[]>([]);
-  const [jobs, setJobs] = useState<JobEntry[]>([]);
+  const [directoryJobs, setJobs] = useState<JobEntry[]>([]);
+  const [jobsAreDemo, setJobsAreDemo] = useState(true);
+  const [reference, setReference] = useState<CustomerReferenceSnapshot | null>(getCachedCustomerReference);
+  const referenceJobs = useMemo(() => reference ? customerReferenceJobs(reference) : [], [reference]);
+  const jobs = useMemo(() => sharedJobDirectory(jobsAreDemo && referenceJobs.length ? [] : directoryJobs, reference ? referenceJobs : null), [directoryJobs, referenceJobs, reference, jobsAreDemo]);
   const [ready, setReady] = useState(false);
   const [bootSlow, setBootSlow] = useState(false);
   const [listError, setListError] = useState("");
@@ -262,16 +271,44 @@ export default function App() {
       const data = await loadDashboard();
       setRequests(data.requests);
       setJobs(data.jobs);
+      setJobsAreDemo(Boolean(data.jobsAreDemo));
       setListError("");
-      // Keep the customer directory in step with the job directory, including
-      // jobs imported on another device. The offline seed list is not a report.
-      if (!data.jobsAreDemo) {
-        void syncCustomersFromJobs(data.jobs).catch(() => undefined);
-      }
     } catch (error) {
       setListError(error instanceof Error ? error.message : String(error));
     }
   }, []);
+
+  useEffect(() => {
+    let active = true;
+    let generation = 0;
+    const read = async () => {
+      const current = ++generation;
+      try {
+        const latest = await getCustomerReference();
+        if (active && generation === current) setReference(latest);
+      } catch {
+        // The last shared snapshot remains available offline.
+      }
+    };
+    const replaced = (event: Event) => {
+      generation++;
+      setReference((event as CustomEvent<CustomerReferenceSnapshot>).detail);
+    };
+    window.addEventListener(CUSTOMER_REFERENCE_CHANGED, replaced);
+    window.addEventListener("online", read);
+    void read();
+    return () => {
+      active = false;
+      window.removeEventListener(CUSTOMER_REFERENCE_CHANGED, replaced);
+      window.removeEventListener("online", read);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (jobsAreDemo && !referenceJobs.length) return;
+    cacheJobDirectory(jobs);
+    void syncCustomersFromJobs(jobs, true).catch(() => undefined);
+  }, [jobs, jobsAreDemo, referenceJobs.length]);
 
   /**
    * Leave whatever is on screen for another view. Any open request or file
@@ -773,7 +810,7 @@ export default function App() {
         </main>
       ) : view.kind === "jobs" ? (
         <main className="shell-request" ref={mainRef} tabIndex={-1}>
-          <AdminJobs jobs={jobs} onImported={setJobs} />
+          <AdminJobs jobs={jobs} onImported={(imported) => { setJobs(imported); setJobsAreDemo(false); }} />
         </main>
       ) : view.kind === "request" ? (
         <main className="shell-request" ref={mainRef} tabIndex={-1}>

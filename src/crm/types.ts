@@ -21,6 +21,10 @@ export interface Customer {
 /** Lightweight row for the customer directory list. */
 export interface CustomerSummary {
   id: string;
+  revision?: number;
+  createdAt?: string;
+  cityStateZip?: string;
+  mergedFromIds?: string[];
   name: string;
   phone?: string;
   email?: string;

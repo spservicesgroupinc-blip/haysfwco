@@ -68,5 +68,6 @@ export function customerIdForPick(
   if (fromOption) return fromOption;
   const key = customerNameKey(pick?.customer ?? typedCustomer);
   if (!key) return undefined;
-  return customers.find((customer) => customerNameKey(customer.name) === key)?.id;
+  const matches = customers.filter((customer) => customerNameKey(customer.name) === key);
+  return matches.length === 1 ? matches[0].id : undefined;
 }

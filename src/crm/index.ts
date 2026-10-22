@@ -106,6 +106,10 @@ export async function listCustomers(): Promise<CustomerSummary[]> {
 
   return customers.map((customer) => ({
     id: customer.id,
+    revision: customer.revision,
+    createdAt: customer.createdAt,
+    cityStateZip: customer.cityStateZip,
+    mergedFromIds: customer.mergedFromIds,
     name: customer.name,
     phone: customer.phone,
     email: customer.email,
