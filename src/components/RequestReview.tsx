@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Download,
   Mail,
+  MoreHorizontal,
   Paperclip,
   Pencil,
   Send,
@@ -103,7 +104,8 @@ export default function RequestReview({
   };
 
   return (
-    <div className="review">
+    <div className={"review"+(editing?" is-editing":"")}>
+      <header className="review-title"><div><p className="workspace-eyebrow">Request review</p><h1>{request.job.customer||"Untitled request"}</h1><p>{request.job.jobNumber||"Job number not provided"} ? {request.estimatorName||"Estimator unassigned"}</p></div><span className={"request-status status-"+request.status}>{{submitted:"In queue",in_review:"In review",needs_information:"Needs info",completed:"Completed"}[request.status]}</span></header>
       <div className="review-actions">
         <CopyDashNote
           text={formatDashNote(request)}
@@ -127,20 +129,170 @@ export default function RequestReview({
           <Download size={16} />
           Download summary PDF
         </button>
-        {onDelete ? (
-          <button
-            type="button"
-            className="button danger"
-            disabled={editing || Boolean(busy) || deleting}
-            onClick={() => setShowDeleteConfirm(true)}
-            title="Delete this change order request"
-          >
-            <Trash2 size={16} />
-            Delete request
-          </button>
-        ) : null}
+        {onDelete && <details className="overflow-menu"><summary aria-label="Request actions"><MoreHorizontal size={20}/></summary><div><button className="button danger" disabled={editing||Boolean(busy)||deleting} onClick={e=>{e.currentTarget.closest("details")?.removeAttribute("open");setShowDeleteConfirm(true);}}><Trash2 size={16}/>Delete request</button></div></details>}
       </div>
 
+      <div className="review-columns"><div className="review-evidence">
+      {editing ? (
+        <RequestEditor
+          request={request}
+          onSaved={(saved) => {
+            setEditing(false);
+            onSaved(saved);
+          }}
+          onCancel={() => setEditing(false)}
+          onReload={onReload}
+          onBusy={onBusy}
+          onLeaveGuard={onLeaveGuard}
+        />
+      ) : (
+        <IntakeReceipt
+          request={{
+            ...request,
+            attachments: request.attachments.filter(
+              (file) => file.id !== request.customerDocument?.attachmentId,
+            ),
+          }}
+          busy={busy}
+          onPreview={onPreview}
+          onDownload={onDownload}
+        />
+      )}
+
+      </div><aside className="review-sidebar" aria-label="Estimator workflow">
+      <fieldset
+        className="review-workflow"
+        disabled={editing || preparingDocument || Boolean(busy)}
+      >
+        {request.status === "submitted" ? (
+          <div className="review-card">
+            <div className="review-card-icon">
+              <Send size={26} />
+            </div>
+            <h2>Estimator? Start work on this request.</h2>
+            <p>
+              <strong>{request.job.customer || "Unnamed project"}</strong>
+              {request.job.jobNumber ? ` · ${request.job.jobNumber}` : ""}
+              <br />
+              {request.requestedChanges.length} requested{" "}
+              {request.requestedChanges.length === 1 ? "change" : "changes"} ·{" "}
+              {request.attachments.length} attachment
+              {request.attachments.length === 1 ? "" : "s"}
+            </p>
+            <label className="field review-field">
+              <span>Estimator name</span>
+              <input
+                aria-label="Estimator name"
+                value={claimName}
+                placeholder="Enter your name to start work"
+                onChange={(event) => setClaimName(event.target.value)}
+              />
+            </label>
+            <button
+              className="button primary large full"
+              disabled={!claimName.trim() || Boolean(busy)}
+              onClick={() => onClaim(claimName)}
+            >
+              <CheckCircle2 size={17} />
+              {busy ? "Starting…" : "Start work"}
+            </button>
+          </div>
+        ) : request.status === "in_review" ? (
+          <div className="review-card">
+            <h2>Estimator review</h2>
+            <p>
+              {request.estimatorName || "The estimator"} is working this
+              request. Review the request details, make any needed edits or
+              inquiries, and mark the request complete when finished.
+            </p>
+            {asking ? (
+              <div className="review-ask">
+                <label className="field">
+                  <span>What information do you need?</span>
+                  <textarea
+                    aria-label="Information request"
+                    value={question}
+                    rows={3}
+                    onChange={(event) => setQuestion(event.target.value)}
+                  />
+                </label>
+                <div className="button-row">
+                  <button
+                    className="button"
+                    disabled={!question.trim() || Boolean(busy)}
+                    onClick={() => onRequestInfo(question)}
+                  >
+                    {busy ? "Sending…" : "Send request"}
+                  </button>
+                  <button
+                    className="text-button"
+                    onClick={() => setAsking(false)}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="button-row">
+                <button
+                  className={request.customerDocument ? "button primary large" : "button large"}
+                  disabled={Boolean(busy)}
+                  onClick={onComplete}
+                >
+                  <CheckCircle2 size={17} />
+                  {busy ? "Completing…" : "Mark complete"}
+                </button>
+                <button className="button" onClick={() => setAsking(true)}>
+                  Request more information
+                </button>
+              </div>
+            )}
+          </div>
+        ) : request.status === "needs_information" ? (
+          <div className="review-card">
+            <div className="review-card-icon">
+              <TriangleAlert size={26} />
+            </div>
+            <h2>More information needed</h2>
+            <blockquote className="review-question">
+              {request.informationQuestion ||
+                "The estimator needs more details."}
+            </blockquote>
+            <label className="field review-field">
+              <span>Your response</span>
+              <textarea
+                aria-label="Response"
+                value={response}
+                rows={3}
+                placeholder="Add the information the estimator asked for."
+                onChange={(event) => setResponse(event.target.value)}
+              />
+            </label>
+            <button
+              className="button primary large full"
+              disabled={!response.trim() || Boolean(busy)}
+              onClick={() => onSendResponse(response)}
+            >
+              <Send size={17} />
+              {busy ? "Sending…" : "Send response"}
+            </button>
+          </div>
+        ) : (
+          <div className="review-card review-done">
+            <div className="review-card-icon">
+              <CheckCircle2 size={26} />
+            </div>
+            <h2>
+              {request.status === "completed" ? "Completed" : "Read only"}
+            </h2>
+            <p>
+              {request.status === "completed"
+                ? "This change order is finished and kept in the log for reference."
+                : "This request is not editable."}
+            </p>
+          </div>
+        )}
+      </fieldset>
       <section
         className="customer-document-card"
         aria-label="Customer change order"
@@ -154,7 +306,7 @@ export default function RequestReview({
         <div className="button-row">
           {request.status !== "completed" ? (
             <button
-              className="button primary"
+              className={request.status === "in_review" ? "button primary" : "button"}
               disabled={editing || Boolean(busy)}
               onClick={() => setPreparingDocument(true)}
             >
@@ -191,7 +343,8 @@ export default function RequestReview({
         ) : null}
       </section>
 
-      <section className="review-card email-card">
+      <details className="review-card email-card review-email">
+        <summary>Email request & attachments</summary>
         <div className="email-card-header">
           <div className="email-card-title">
             <Mail size={18} />
@@ -297,172 +450,15 @@ export default function RequestReview({
             </button>
           </div>
         ) : null}
-      </section>
+      </details>
 
       {busy ? (
         <p className="receipt-caption" role="status">
           {busy}
         </p>
       ) : null}
-      {editing ? (
-        <RequestEditor
-          request={request}
-          onSaved={(saved) => {
-            setEditing(false);
-            onSaved(saved);
-          }}
-          onCancel={() => setEditing(false)}
-          onReload={onReload}
-          onBusy={onBusy}
-          onLeaveGuard={onLeaveGuard}
-        />
-      ) : (
-        <IntakeReceipt
-          request={{
-            ...request,
-            attachments: request.attachments.filter(
-              (file) => file.id !== request.customerDocument?.attachmentId,
-            ),
-          }}
-          busy={busy}
-          onPreview={onPreview}
-          onDownload={onDownload}
-        />
-      )}
+      </aside></div>
 
-      <fieldset
-        className="review-workflow"
-        disabled={editing || preparingDocument || Boolean(busy)}
-      >
-        {request.status === "submitted" ? (
-          <div className="review-card">
-            <div className="review-card-icon">
-              <Send size={26} />
-            </div>
-            <h2>Estimator? Start work on this request.</h2>
-            <p>
-              <strong>{request.job.customer || "Unnamed project"}</strong>
-              {request.job.jobNumber ? ` · ${request.job.jobNumber}` : ""}
-              <br />
-              {request.requestedChanges.length} requested{" "}
-              {request.requestedChanges.length === 1 ? "change" : "changes"} ·{" "}
-              {request.attachments.length} attachment
-              {request.attachments.length === 1 ? "" : "s"}
-            </p>
-            <label className="field review-field">
-              <span>Estimator name</span>
-              <input
-                aria-label="Estimator name"
-                value={claimName}
-                placeholder="Enter your name to start work"
-                onChange={(event) => setClaimName(event.target.value)}
-              />
-            </label>
-            <button
-              className="button primary large full"
-              disabled={!claimName.trim() || Boolean(busy)}
-              onClick={() => onClaim(claimName)}
-            >
-              <CheckCircle2 size={17} />
-              {busy ? "Starting…" : "Start work"}
-            </button>
-          </div>
-        ) : request.status === "in_review" ? (
-          <div className="review-card">
-            <h2>Estimator review</h2>
-            <p>
-              {request.estimatorName || "The estimator"} is working this
-              request. Review the request details, make any needed edits or
-              inquiries, and mark the request complete when finished.
-            </p>
-            {asking ? (
-              <div className="review-ask">
-                <label className="field">
-                  <span>What information do you need?</span>
-                  <textarea
-                    aria-label="Information request"
-                    value={question}
-                    rows={3}
-                    onChange={(event) => setQuestion(event.target.value)}
-                  />
-                </label>
-                <div className="button-row">
-                  <button
-                    className="button"
-                    disabled={!question.trim() || Boolean(busy)}
-                    onClick={() => onRequestInfo(question)}
-                  >
-                    {busy ? "Sending…" : "Send request"}
-                  </button>
-                  <button
-                    className="text-button"
-                    onClick={() => setAsking(false)}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="button-row">
-                <button
-                  className="button primary large"
-                  disabled={Boolean(busy)}
-                  onClick={onComplete}
-                >
-                  <CheckCircle2 size={17} />
-                  {busy ? "Completing…" : "Mark complete"}
-                </button>
-                <button className="button" onClick={() => setAsking(true)}>
-                  Request more information
-                </button>
-              </div>
-            )}
-          </div>
-        ) : request.status === "needs_information" ? (
-          <div className="review-card">
-            <div className="review-card-icon">
-              <TriangleAlert size={26} />
-            </div>
-            <h2>More information needed</h2>
-            <blockquote className="review-question">
-              {request.informationQuestion ||
-                "The estimator needs more details."}
-            </blockquote>
-            <label className="field review-field">
-              <span>Your response</span>
-              <textarea
-                aria-label="Response"
-                value={response}
-                rows={3}
-                placeholder="Add the information the estimator asked for."
-                onChange={(event) => setResponse(event.target.value)}
-              />
-            </label>
-            <button
-              className="button primary large full"
-              disabled={!response.trim() || Boolean(busy)}
-              onClick={() => onSendResponse(response)}
-            >
-              <Send size={17} />
-              {busy ? "Sending…" : "Send response"}
-            </button>
-          </div>
-        ) : (
-          <div className="review-card review-done">
-            <div className="review-card-icon">
-              <CheckCircle2 size={26} />
-            </div>
-            <h2>
-              {request.status === "completed" ? "Completed" : "Read only"}
-            </h2>
-            <p>
-              {request.status === "completed"
-                ? "This change order is finished and kept in the log for reference."
-                : "This request is not editable."}
-            </p>
-          </div>
-        )}
-      </fieldset>
 
       {preparingDocument ? (
         <Suspense fallback={<p role="status">Opening change order editor…</p>}>

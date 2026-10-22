@@ -95,6 +95,14 @@ export default function JobWorkspace({
   onBack: () => void;
 }) {
   const packetSelectId = useId();
+  const [focusField,setFocusField]=useState("");
+  useEffect(()=>{
+    if(!focusField)return;
+    const frame=requestAnimationFrame(()=>{
+      const input=document.getElementById(focusField);
+      if(input){let parent=input.parentElement;while(parent){if(parent instanceof HTMLDetailsElement)parent.open=true;parent=parent.parentElement;}input.scrollIntoView({block:"center"});input.focus({preventScroll:true});setFocusField("");}
+    });return()=>cancelAnimationFrame(frame);
+  },[focusField]);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const current = useRef<Workspace | null>(null);
   const [row, setRow] = useState<WorkspaceRow>();
@@ -519,6 +527,7 @@ export default function JobWorkspace({
         </div>
       )}
       {busy && <p role="status">{busy}</p>}
+      {missing.length>0 && <div className="workspace-missing"><strong>Job details to complete</strong><div>{missing.map(field=><button className="text-button" key={field.inputId} onClick={()=>{setTab("details");setFocusField(field.inputId);}}>{field.label} ?</button>)}</div></div>}
       <nav className="workspace-tabs" aria-label="Job sections">
         {(
           [

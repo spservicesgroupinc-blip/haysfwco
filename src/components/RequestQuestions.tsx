@@ -1,4 +1,5 @@
 import { Camera } from "lucide-react";
+import { useId } from "react";
 import type { ChangeRequest } from "../types";
 import "./RequestQuestions.css";
 
@@ -13,6 +14,7 @@ export default function RequestQuestions({
   disabled?: boolean;
   onChange: (answers: Answers) => void;
 }) {
+  const groupName=useId();
   const answers = {
     requestType,
     customerCredits,
@@ -33,7 +35,8 @@ export default function RequestQuestions({
         ).map(([value, label]) => (
           <label className="request-checkbox" key={value}>
             <input
-              type="checkbox"
+              type="radio"
+              name={groupName}
               checked={requestType === value}
               onChange={(event) =>
                 onChange({
@@ -46,6 +49,7 @@ export default function RequestQuestions({
             <span>{label}</span>
           </label>
         ))}
+        <label className="request-checkbox"><input type="radio" name={groupName} checked={!requestType} onChange={()=>onChange({...answers,requestType:undefined})}/><span>Not specified</span></label>
         {requestType === "insurance_supplement" ? (
           <div className="insurance-supplement-reminder" role="status">
             <Camera size={18} />

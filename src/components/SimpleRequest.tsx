@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Camera,
@@ -35,6 +35,9 @@ import PhotoAnnotator from "./PhotoAnnotator";
 import RequestQuestions from "./RequestQuestions";
 import CopyDashNote from "./CopyDashNote";
 import { formatDashNote } from "../services/dashNote";
+import { type RequestDraft } from "../services/requestDrafts";
+import { queueDraftSubmission, runDraftSubmission } from "../services/durableSubmission";
+import { useRequestDraft } from "./useRequestDraft";
 import "./SimpleRequest.css";
 
 export interface SimpleRequestProps {
@@ -44,6 +47,8 @@ export interface SimpleRequestProps {
   requests: RequestSummary[];
   /** Fresh request seeded from a permanent job workspace. */
   initialRequest?: ChangeRequest;
+  initialDraft?: RequestDraft;
+  onLeaveGuard?: (guard:(()=>boolean)|null)=>void;
   /** The shell runs the task after returning home and owns its notification. */
   onSubmit: (send: () => Promise<string>) => void;
 }
@@ -241,7 +246,15 @@ function PhotoTile({
 export default function SimpleRequest(
   props: SimpleRequestProps,
 ): React.ReactElement {
-  const { jobs, requests, onSubmit, initialRequest } = props;
+  const { jobs, requests, onSubmit, initialRequest, initialDraft } = props;
+  const restored = initialDraft?.values;
+  const [draftId] = useState(
+    () => initialDraft?.id || initialRequest?.id || newId(),
+  );
+  const errorSummary = useRef<HTMLDivElement>(null);
+  const amountDetails = useRef<HTMLDetailsElement>(null);
+  const emailDetails = useRef<HTMLDetailsElement>(null);
+  const [submitError, setSubmitError] = useState("");
   // Only active directory rows are offered; without any, the page falls back to
   // a typed customer name so it still works.
   const seededJob: JobEntry | undefined = initialRequest?.workspaceId
@@ -260,7 +273,7 @@ export default function SimpleRequest(
         updatedAt: initialRequest.updatedAt,
       }
     : undefined;
-  const directoryJobs = seededJob
+  const directoryJobs = restored?.selectedJob ? [restored.selectedJob,...jobs.filter(job=>job.active && job.id !== restored.selectedJob!.id)] : seededJob
     ? [
         seededJob,
         ...jobs.filter(
@@ -276,28 +289,28 @@ export default function SimpleRequest(
   const recognition = useRef<SpeechRecognitionLike | null>(null);
   const submissionStarted = useRef(false);
 
-  const [jobId, setJobId] = useState(seededJob?.id || "");
+  const [jobId, setJobId] = useState(restored?.selectedJob?.id || seededJob?.id || "");
   // The customer/job search text. In directory mode it is the type-ahead query
   // and then the chosen job's label; without a directory it is simply the
   // customer's name, so the page still works on a bare device.
   const [customerText, setCustomerText] = useState(
-    seededJob ? jobLabel(seededJob) : "",
+    restored?.customerText ?? (seededJob ? jobLabel(seededJob) : ""),
   );
   const [matchListOpen, setMatchListOpen] = useState(false);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState(restored?.note || "");
   const [requestType, setRequestType] =
-    useState<ChangeRequest["requestType"]>();
-  const [customerCredits, setCustomerCredits] = useState(false);
-  const [amount, setAmount] = useState("");
-  const [amountSign, setAmountSign] = useState<"+" | "-">("+");
+    useState<ChangeRequest["requestType"]>(restored?.requestType);
+  const [customerCredits, setCustomerCredits] = useState(restored?.customerCredits || false);
+  const [amount, setAmount] = useState(restored?.amount || "");
+  const [amountSign, setAmountSign] = useState<"+" | "-">(restored?.amountSign || "+");
   const [amountError, setAmountError] = useState("");
-  const [photos, setPhotos] = useState<PhotoEntry[]>([]);
-  const [pdf, setPdf] = useState<File | null>(null);
+  const [photos, setPhotos] = useState<PhotoEntry[]>(() => restored?.photos.map(photo=>({...photo,file:new File([photo.blob],photo.name,{type:photo.type,lastModified:photo.lastModified})})) || []);
+  const [pdf, setPdf] = useState<File | null>(()=>restored?.pdf ? new File([restored.pdf.blob],restored.pdf.name,{type:restored.pdf.type,lastModified:restored.pdf.lastModified}) : null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [customerError, setCustomerError] = useState("");
   const [contentError, setContentError] = useState("");
-  const [emailAddress, setEmailAddress] = useState("");
+  const [emailAddress, setEmailAddress] = useState(restored?.emailAddress || "");
   const [emailError, setEmailError] = useState("");
   const [listening, setListening] = useState(false);
   const [interim, setInterim] = useState("");
@@ -309,7 +322,14 @@ export default function SimpleRequest(
   // and the textarea keeps working.
   const [voiceSupported] = useState(() => speechRecognition() !== null);
 
-  const selectedJob = directoryJobs.find((job) => job.id === jobId) ?? null;
+  const selectedJob = useMemo(()=>directoryJobs.find(job=>job.id===jobId) ?? null,[jobs,jobId,initialDraft,initialRequest]);
+  const draftPhotos=useMemo(()=>photos.map(photo=>({id:photo.id,name:photo.file.name,type:photo.blob.type,lastModified:photo.file.lastModified,blob:photo.blob,edited:photo.edited})),[photos]);
+  const draftPdf=useMemo(()=>pdf ? {name:pdf.name,type:pdf.type,lastModified:pdf.lastModified,blob:pdf} : null,[pdf]);
+  const draft = useRequestDraft(draftId, {
+    customerText, selectedJob, initialRequest, note, requestType, customerCredits, amount, amountSign, emailAddress,
+    photos:photos.map(photo=>({id:photo.id,name:photo.file.name,type:photo.blob.type,lastModified:photo.file.lastModified,blob:photo.blob,edited:photo.edited})),
+    pdf:pdf ? {name:pdf.name,type:pdf.type,lastModified:pdf.lastModified,blob:pdf} : null,
+  }, submissionStarted, props.onLeaveGuard);
   const amountText = amount.trim();
   const validAmount = !amountText || /^\d+(?:\.\d{1,2})?$/.test(amountText);
   const [amountDollars, amountCents = ""] = amountText.split(".");
@@ -478,93 +498,70 @@ export default function SimpleRequest(
   const submit = async () => {
     if (submissionStarted.current) return;
     const customer = (selectedJob?.customer ?? customerText).trim();
-    const nextCustomerError = customer
-      ? ""
-      : fallbackCustomer
-        ? "Enter the customer or project owner."
-        : "Type a customer or pick a job from the list.";
-    const nextContentError =
-      note.trim() || photos.length
-        ? ""
-        : "Add a note or at least one photo before sending.";
-    const nextAmountError = validAmount
-      ? ""
-      : "Enter dollars with at most two decimal places, and use Plus or Minus to choose the sign.";
+    const nextCustomerError = customer ? "" : "Enter the customer or choose a job.";
+    const nextContentError = note.trim() || photos.length ? "" : "Add a note or at least one photo before sending.";
+    const nextAmountError = validAmount ? "" : "Enter dollars with at most two decimal places, and use Plus or Minus to choose the sign.";
     const targetEmail = emailAddress.trim();
     const nextEmailError =
-      targetEmail && (!targetEmail.includes("@") || !targetEmail.includes("."))
+      targetEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail)
         ? "Please enter a valid email address or clear the field."
         : "";
     setCustomerError(nextCustomerError);
     setContentError(nextContentError);
     setAmountError(nextAmountError);
     setEmailError(nextEmailError);
+    setSubmitError("");
     if (
       nextCustomerError ||
       nextContentError ||
       nextAmountError ||
       nextEmailError
-    )
+    ) {
+      if (nextAmountError && amountDetails.current)
+        amountDetails.current.open = true;
+      if (nextEmailError && emailDetails.current)
+        emailDetails.current.open = true;
+      window.setTimeout(() => errorSummary.current?.focus(), 0);
       return;
+    }
     if (listening) stopListening();
     submissionStarted.current = true;
     setBusy(true);
-    // A workspace seed already knows its prior change orders. A directory job
-    // is matched by job number so a second or third submission continues the
-    // same running contract total.
-    const prior =
-      !initialRequest?.workspaceId && selectedJob
-        ? await priorChangesForJob(
-            requests,
-            selectedJob.jobNumber,
-            openRequest,
-          )
-        : undefined;
-    const request = buildRequest(initialRequest ?? null, {
-      job: selectedJob,
-      customer,
-      note,
-      requestType,
-      customerCredits,
-      knownChangeAmount,
-      prior,
-    });
-    onSubmit(
-      createRequestSubmission(
-        request,
-        [
-          ...photos.map((photo) => ({
-            prepare: async () => {
-              const prepared = await preparePhotoForUpload(
-                photo.blob,
-                photo.file.name,
-              );
-              return {
-                name: prepared.name,
-                mimeType: prepared.mimeType,
-                size: prepared.size,
-                kind: "photo" as const,
-                data: await blobToBase64(prepared.blob),
-              };
-            },
-          })),
-          ...(pdf
-            ? [
-                {
-                  prepare: async () => ({
-                    name: pdf.name,
-                    mimeType: pdf.type || "application/pdf",
-                    size: pdf.size,
-                    kind: "document" as const,
-                    data: await blobToBase64(pdf),
-                  }),
-                },
-              ]
-            : []),
-        ],
-        targetEmail,
-      ),
-    );
+    try {
+      const snapshot = await draft.persist();
+      // A workspace seed already knows its prior change orders. A directory job
+      // is matched by job number so a second or third submission continues the
+      // same running contract total.
+      const prior =
+        !initialRequest?.workspaceId && selectedJob
+          ? await priorChangesForJob(
+              requests,
+              selectedJob.jobNumber,
+              openRequest,
+            )
+          : undefined;
+      const request = buildRequest(initialRequest ?? null, {
+        job: selectedJob,
+        customer,
+        note,
+        requestType,
+        customerCredits,
+        knownChangeAmount,
+        prior,
+      });
+      request.id = draftId;
+      await queueDraftSubmission(snapshot, request);
+      onSubmit(() => runDraftSubmission(draftId));
+    } catch (error) {
+      submissionStarted.current = false;
+      setBusy(false);
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : "Could not save the submission on this device. Keep this page open and retry.",
+      );
+      window.setTimeout(() => errorSummary.current?.focus(), 0);
+    }
   };
 
   return (
@@ -578,14 +575,14 @@ export default function SimpleRequest(
         }}
       >
         <header className="sr-head">
-          <h1>Quick request</h1>
+          <h1>New request</h1>
           <p className="sr-help">
-            Send a change to estimating. A note or one photo is enough.
+            Choose a job, describe the change, and add any evidence. A note or one photo is enough.
           </p>
         </header>
 
         <section className="sr-section">
-          <h2 className="sr-section-title">Customer</h2>
+          <h2 className="sr-section-title">Job / customer</h2>
           <div
             className="sr-combo"
             onBlur={(event) => {
@@ -710,6 +707,177 @@ export default function SimpleRequest(
         </section>
 
         <section className="sr-section">
+          <h2 className="sr-section-title">What changed?</h2>
+          <label className="sr-label" htmlFor={noteId}>
+            What changed?
+          </label>
+          <textarea
+            id={noteId}
+            className="sr-textarea"
+            rows={3}
+            value={note}
+            disabled={busy}
+            aria-label="What changed?"
+            placeholder="e.g. Added insulation to the open kitchen wall"
+            onChange={(event) => {
+              setNote(event.target.value);
+              setContentError("");
+            }}
+          />
+          {voiceSupported ? (
+            <button
+              type="button"
+              className={`button sr-mic${listening ? " is-listening" : ""}`}
+              aria-pressed={listening}
+              disabled={busy}
+              onClick={() => (listening ? stopListening() : startListening())}
+            >
+              {listening ? <MicOff size={20} /> : <Mic size={20} />}
+              {listening ? "Stop listening" : "Speak the note"}
+            </button>
+          ) : (
+            <p className="sr-help">
+              Voice input is not available in this browser — type your note
+              instead.
+            </p>
+          )}
+          {listening ? (
+            <p className="sr-listening" aria-live="polite">
+              <span className="sr-listening-dot" aria-hidden="true" />
+              Listening…{interim ? <em>{interim}</em> : null}
+            </p>
+          ) : null}
+          {voiceNote ? (
+            <p
+              className={voiceNote.tone === "error" ? "sr-error" : "sr-help"}
+              role={voiceNote.tone === "error" ? "alert" : "status"}
+            >
+              {voiceNote.text}
+            </p>
+          ) : null}
+          {contentError ? (
+            <p className="sr-error" role="alert">
+              {contentError}
+            </p>
+          ) : null}
+        </section>
+
+        <section className="sr-section">
+          <h2 className="sr-section-title">Photos & PDF</h2>
+          {requestType === "insurance_supplement" ? (
+            <div className="sr-insurance-photo-reminder" role="note">
+              <Camera size={16} />
+              <span>
+                Insurance supplements require photos. Please attach photos for
+                insurance.
+              </span>
+            </div>
+          ) : null}
+          <p className="sr-help">
+            Take a photo or pick one from the phone. Mark up a photo to point at
+            the work.
+          </p>
+          <input
+            ref={photoInput}
+            type="file"
+            // One input backs both sources: the button that is pressed sets the
+            // `capture` attribute just before the picker opens, so the phone
+            // goes straight to the camera or shows the photo library. The
+            // explicit list (same as the full request form) makes iOS transcode
+            // HEIC library picks to JPEG; `image/*` would hand the raw HEIC
+            // over, which the Apps Script endpoint rejects.
+            accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+            multiple
+            hidden
+            aria-label="Add photos"
+            disabled={busy}
+            onChange={(event) => {
+              const files = Array.from(event.target.files ?? []);
+              event.target.value = "";
+              addPhotos(files);
+            }}
+          />
+          <div className="sr-photo-sources">
+            <button
+              type="button"
+              className="button sr-photo-source"
+              disabled={busy}
+              onClick={() => openPhotoPicker("camera")}
+            >
+              <Camera size={19} />
+              Take photo
+            </button>
+            <button
+              type="button"
+              className="button sr-photo-source"
+              disabled={busy}
+              onClick={() => openPhotoPicker("library")}
+            >
+              <Images size={19} />
+              Choose from library
+            </button>
+          </div>
+          {photos.length ? (
+            <ul className="sr-photo-grid">
+              {photos.map((photo, index) => (
+                <PhotoTile
+                  key={photo.id}
+                  photo={photo}
+                  index={index}
+                  disabled={busy}
+                  onEdit={setEditingId}
+                  onRemove={removePhoto}
+                />
+              ))}
+            </ul>
+          ) : null}
+        <div className="sr-pdf-block">
+          <h2 className="sr-section-title">
+            PDF <span className="sr-optional">Optional</span>
+          </h2>
+          <input
+            ref={pdfInput}
+            type="file"
+            accept="application/pdf,.pdf"
+            hidden
+            aria-label="Attach a PDF"
+            disabled={busy}
+            onChange={(event) => {
+              const file = event.target.files?.[0] ?? null;
+              event.target.value = "";
+              if (file) setPdf(file);
+            }}
+          />
+          {pdf ? (
+            <span className="sr-file-row">
+              <FileText size={18} />
+              <span className="sr-file-name">{pdf.name}</span>
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                aria-label={`Remove ${pdf.name}`}
+                onClick={() => setPdf(null)}
+              >
+                <X size={17} />
+                Remove
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="button sr-wide"
+              disabled={busy}
+              onClick={() => pdfInput.current?.click()}
+            >
+              <FileText size={18} />
+              Attach a PDF
+            </button>
+          )}
+        </div>
+        </section>
+
+        <section className="sr-section">
           <RequestQuestions
             requestType={requestType}
             customerCredits={customerCredits}
@@ -721,10 +889,9 @@ export default function SimpleRequest(
           />
         </section>
 
-        <section className="sr-section sr-amount-section">
-          <h2 className="sr-section-title">
-            Known change amount <span className="sr-optional">optional</span>
-          </h2>
+        <details className="sr-section sr-amount-section" ref={amountDetails}>
+          <summary>Known change amount <span className="sr-optional">Optional</span></summary>
+          
           <p className="sr-help" id={`${amountId}-help`}>
             If you know the dollar amount, enter it here. Choose plus for an
             added cost or minus for a deduction.
@@ -781,181 +948,10 @@ export default function SimpleRequest(
               {amountError}
             </p>
           ) : null}
-        </section>
+        </details>
 
-        <section className="sr-section">
-          <h2 className="sr-section-title">Photos</h2>
-          {requestType === "insurance_supplement" ? (
-            <div className="sr-insurance-photo-reminder" role="note">
-              <Camera size={16} />
-              <span>
-                Insurance supplements require photos. Please attach photos for
-                insurance.
-              </span>
-            </div>
-          ) : null}
-          <p className="sr-help">
-            Take a photo or pick one from the phone. Mark up a photo to point at
-            the work.
-          </p>
-          <input
-            ref={photoInput}
-            type="file"
-            // One input backs both sources: the button that is pressed sets the
-            // `capture` attribute just before the picker opens, so the phone
-            // goes straight to the camera or shows the photo library. The
-            // explicit list (same as the full request form) makes iOS transcode
-            // HEIC library picks to JPEG; `image/*` would hand the raw HEIC
-            // over, which the Apps Script endpoint rejects.
-            accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
-            multiple
-            hidden
-            aria-label="Add photos"
-            disabled={busy}
-            onChange={(event) => {
-              const files = Array.from(event.target.files ?? []);
-              event.target.value = "";
-              addPhotos(files);
-            }}
-          />
-          <div className="sr-photo-sources">
-            <button
-              type="button"
-              className="button primary sr-photo-source"
-              disabled={busy}
-              onClick={() => openPhotoPicker("camera")}
-            >
-              <Camera size={19} />
-              Take photo
-            </button>
-            <button
-              type="button"
-              className="button sr-photo-source"
-              disabled={busy}
-              onClick={() => openPhotoPicker("library")}
-            >
-              <Images size={19} />
-              Choose from library
-            </button>
-          </div>
-          {photos.length ? (
-            <ul className="sr-photo-grid">
-              {photos.map((photo, index) => (
-                <PhotoTile
-                  key={photo.id}
-                  photo={photo}
-                  index={index}
-                  disabled={busy}
-                  onEdit={setEditingId}
-                  onRemove={removePhoto}
-                />
-              ))}
-            </ul>
-          ) : null}
-        </section>
-
-        <section className="sr-section">
-          <h2 className="sr-section-title">What changed?</h2>
-          <label className="sr-label" htmlFor={noteId}>
-            What changed?
-          </label>
-          <textarea
-            id={noteId}
-            className="sr-textarea"
-            rows={5}
-            value={note}
-            disabled={busy}
-            aria-label="What changed?"
-            placeholder="e.g. Added insulation to the open kitchen wall"
-            onChange={(event) => {
-              setNote(event.target.value);
-              setContentError("");
-            }}
-          />
-          {voiceSupported ? (
-            <button
-              type="button"
-              className={`button sr-mic${listening ? " is-listening" : ""}`}
-              aria-pressed={listening}
-              disabled={busy}
-              onClick={() => (listening ? stopListening() : startListening())}
-            >
-              {listening ? <MicOff size={20} /> : <Mic size={20} />}
-              {listening ? "Stop listening" : "Speak the note"}
-            </button>
-          ) : (
-            <p className="sr-help">
-              Voice input is not available in this browser — type your note
-              instead.
-            </p>
-          )}
-          {listening ? (
-            <p className="sr-listening" aria-live="polite">
-              <span className="sr-listening-dot" aria-hidden="true" />
-              Listening…{interim ? <em>{interim}</em> : null}
-            </p>
-          ) : null}
-          {voiceNote ? (
-            <p
-              className={voiceNote.tone === "error" ? "sr-error" : "sr-help"}
-              role={voiceNote.tone === "error" ? "alert" : "status"}
-            >
-              {voiceNote.text}
-            </p>
-          ) : null}
-          {contentError ? (
-            <p className="sr-error" role="alert">
-              {contentError}
-            </p>
-          ) : null}
-        </section>
-
-        <section className="sr-section">
-          <h2 className="sr-section-title">
-            PDF <span className="sr-optional">Optional</span>
-          </h2>
-          <input
-            ref={pdfInput}
-            type="file"
-            accept="application/pdf,.pdf"
-            hidden
-            aria-label="Attach a PDF"
-            disabled={busy}
-            onChange={(event) => {
-              const file = event.target.files?.[0] ?? null;
-              event.target.value = "";
-              if (file) setPdf(file);
-            }}
-          />
-          {pdf ? (
-            <span className="sr-file-row">
-              <FileText size={18} />
-              <span className="sr-file-name">{pdf.name}</span>
-              <button
-                type="button"
-                className="button"
-                disabled={busy}
-                aria-label={`Remove ${pdf.name}`}
-                onClick={() => setPdf(null)}
-              >
-                <X size={17} />
-                Remove
-              </button>
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="button sr-wide"
-              disabled={busy}
-              onClick={() => pdfInput.current?.click()}
-            >
-              <FileText size={18} />
-              Attach a PDF
-            </button>
-          )}
-        </section>
-
-        <section className="sr-section email-card">
+        <details className="sr-section email-card" ref={emailDetails}>
+          <summary>Email a copy <span className="sr-optional">Optional</span></summary>
           <div className="email-card-header">
             <div className="email-card-title">
               <Mail size={18} />
@@ -973,15 +969,11 @@ export default function SimpleRequest(
               </span>
             )}
           </div>
-          <p className="email-card-desc">
-            Enter an email address to send this change order and attachments
-            directly. Sending automatically saves the change order, submits it
-            to estimating, and returns to the home page.
-          </p>
+          <p className="email-card-desc">A copy will be emailed after this request and its attachments are saved to estimating.</p>
           <div className="email-form">
             <div className="email-input-group">
               <input
-                type="email"
+                id="request-email" type="email"
                 className="email-input"
                 value={emailAddress}
                 onChange={(e) => {
@@ -992,17 +984,7 @@ export default function SimpleRequest(
                 aria-label="Recipient email address"
                 disabled={busy}
               />
-              <button
-                type="button"
-                className="button primary"
-                disabled={!emailAddress.trim() || busy}
-                onClick={() => submit()}
-              >
-                <Send size={15} />
-                {busy
-                  ? "Sending email & submitting…"
-                  : "Send email & submit to estimating"}
-              </button>
+
             </div>
             <div className="email-suggestions">
               <span>Quick fill:</span>
@@ -1043,9 +1025,10 @@ export default function SimpleRequest(
               </button>
             </div>
           ) : null}
-        </section>
+        </details>
 
         <div className="sr-submit">
+          <div className="sr-draft-status"><span role="status">{draft.status}</span>{draft.error && <p role="alert">{draft.error} <button type="button" className="text-button" onClick={()=>void draft.persist().catch(()=>undefined)}>Retry draft save</button></p>}{emailAddress.trim() && <small>Also email: {emailAddress.trim()}</small>}</div>
           <CopyDashNote
             disabled={busy}
             text={formatDashNote(

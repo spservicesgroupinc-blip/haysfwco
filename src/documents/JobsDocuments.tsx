@@ -23,6 +23,7 @@ import "./documents.css";
 
 export default function JobsDocuments({
   workspaceId,
+  initialTool,
   jobs,
   requests,
   onOpenWorkspace,
@@ -31,6 +32,7 @@ export default function JobsDocuments({
   onBack,
 }: {
   workspaceId?: string;
+  initialTool?: "migration" | "reference";
   jobs: JobEntry[];
   requests: RequestSummary[];
   onOpenWorkspace: (id: string) => void;
@@ -44,6 +46,7 @@ export default function JobsDocuments({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [tool, setTool] = useState<"jobs" | "migration" | "reference">("jobs");
+  useEffect(() => setTool(initialTool || "jobs"), [initialTool]);
   useEffect(() => {
     let active = true;
     const read = async () => {
@@ -143,30 +146,8 @@ export default function JobsDocuments({
           New job
         </button>
       </div>
-      <div className="workspace-tools">
-        <button
-          className="button"
-          aria-pressed={tool === "jobs"}
-          onClick={() => setTool("jobs")}
-        >
-          Saved jobs
-        </button>
-        <button
-          className="button"
-          aria-pressed={tool === "migration"}
-          onClick={() => setTool("migration")}
-        >
-          <Upload size={16} />
-          Import document jobs
-        </button>
-        <button
-          className="button"
-          aria-pressed={tool === "reference"}
-          onClick={() => setTool("reference")}
-        >
-          Customer reference CSV
-        </button>
-      </div>
+      {tool !== "jobs" && <div className="workspace-tools"><button className="button" onClick={()=>setTool("jobs")}>Back to saved jobs</button></div>}
+
       {error && (
         <div className="notice danger" role="alert">
           {error}
@@ -254,8 +235,8 @@ export default function JobsDocuments({
               </p>
             )}
           </section>
-          <section className="workspace-panel">
-            <h2>Start from the job directory</h2>
+          <details className="workspace-panel directory-disclosure">
+            <summary>Start from the job directory</summary>
             <p>
               Choose an imported job to start its workspace. Future directory
               imports preserve your saved details and documents.
@@ -288,7 +269,7 @@ export default function JobsDocuments({
                 No directory jobs imported yet. You can create a job manually.
               </p>
             )}
-          </section>
+          </details>
         </>
       )}
     </div>
