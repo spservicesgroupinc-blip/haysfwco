@@ -6,6 +6,10 @@ import {
 import { CHECKLIST_BOXES } from "../documents/types/productionChecklist";
 import { createRequest } from "../services/requests";
 import { moneyCents } from "../services/contract";
+import {
+  priorChangeSummary,
+  type PriorChangeSummary,
+} from "../services/changeOrder";
 import type { ChangeRequest, JobEntry } from "../types";
 import type { Workspace } from "./types";
 
@@ -49,9 +53,11 @@ export function workspaceFromDirectory(entry: JobEntry): Workspace {
 export function requestFromWorkspace(
   workspace: Workspace,
   existing?: ChangeRequest,
+  prior?: PriorChangeSummary,
 ): ChangeRequest {
   if (existing) return structuredClone(existing);
   const request = createRequest();
+  const totals = prior ?? priorChangeSummary([], workspace.previousChanges);
   const { customer, insurance, team, branch } = workspace.record;
   return {
     ...request,
@@ -74,7 +80,10 @@ export function requestFromWorkspace(
       carrier: insurance.carrier,
       claim: insurance.claimNumber,
       originalContract: workspace.originalContract,
-      previousChanges: workspace.previousChanges,
+      // Prior change orders continue the job's contract math; the job's
+      // baseline plus every priced earlier request, never just the last one.
+      previousChanges: totals.previousChanges,
+      orderNumber: totals.nextOrderNumber,
     },
   };
 }

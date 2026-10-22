@@ -14,9 +14,18 @@ import {
   Send,
   X,
 } from "lucide-react";
-import { newId, type ChangeRequest, type JobEntry } from "../types";
+import {
+  newId,
+  type ChangeRequest,
+  type JobEntry,
+  type RequestSummary,
+} from "../types";
 import { createRequest, createRequestedChange } from "../services/requests";
-import { blobToBase64 } from "../services/storage";
+import { blobToBase64, openRequest } from "../services/storage";
+import {
+  priorChangesForJob,
+  type PriorChangeSummary,
+} from "../services/changeOrder";
 import { createRequestSubmission } from "../services/requestSubmission";
 import {
   looksLikePhotoFile,
@@ -34,6 +43,8 @@ import "./SimpleRequest.css";
 export interface SimpleRequestProps {
   /** The admin-managed customer/job directory. */
   jobs: JobEntry[];
+  /** Dashboard summaries, used to roll earlier change orders for the job. */
+  requests: RequestSummary[];
   /** Fresh request seeded from a permanent job workspace. */
   initialRequest?: ChangeRequest;
   initialDraft?: RequestDraft;
@@ -119,7 +130,12 @@ const VOICE_ERRORS: Record<string, string | undefined> = {
  */
 function buildRequest(
   base: ChangeRequest | null,
-  details: { job: JobEntry | null; customer: string; note: string } & Pick<
+  details: {
+    job: JobEntry | null;
+    customer: string;
+    note: string;
+    prior?: PriorChangeSummary | null;
+  } & Pick<
     ChangeRequest,
     "requestType" | "customerCredits" | "knownChangeAmount"
   >,
@@ -148,6 +164,14 @@ function buildRequest(
       // blank entry never wipes an amount the request already holds.
       ...(details.job?.contractAmount
         ? { originalContract: details.job.contractAmount }
+        : {}),
+      // A new change order continues the job's running total; the workspace
+      // seed already carries its own rolled-up values.
+      ...(details.prior
+        ? {
+            previousChanges: details.prior.previousChanges,
+            orderNumber: details.prior.nextOrderNumber,
+          }
         : {}),
     },
     requestedChanges: description
@@ -222,13 +246,15 @@ function PhotoTile({
 export default function SimpleRequest(
   props: SimpleRequestProps,
 ): React.ReactElement {
-  const { jobs, onSubmit, initialRequest, initialDraft } = props;
+  const { jobs, requests, onSubmit, initialRequest, initialDraft } = props;
   const restored = initialDraft?.values;
-  const [draftId] = useState(() => initialDraft?.id || initialRequest?.id || newId());
+  const [draftId] = useState(
+    () => initialDraft?.id || initialRequest?.id || newId(),
+  );
   const errorSummary = useRef<HTMLDivElement>(null);
   const amountDetails = useRef<HTMLDetailsElement>(null);
   const emailDetails = useRef<HTMLDetailsElement>(null);
-  const [submitError,setSubmitError] = useState("");
+  const [submitError, setSubmitError] = useState("");
   // Only active directory rows are offered; without any, the page falls back to
   // a typed customer name so it still works.
   const seededJob: JobEntry | undefined = initialRequest?.workspaceId
@@ -476,25 +502,65 @@ export default function SimpleRequest(
     const nextContentError = note.trim() || photos.length ? "" : "Add a note or at least one photo before sending.";
     const nextAmountError = validAmount ? "" : "Enter dollars with at most two decimal places, and use Plus or Minus to choose the sign.";
     const targetEmail = emailAddress.trim();
-    const nextEmailError = targetEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail) ? "Please enter a valid email address or clear the field." : "";
-    setCustomerError(nextCustomerError);setContentError(nextContentError);setAmountError(nextAmountError);setEmailError(nextEmailError);setSubmitError("");
-    if(nextCustomerError || nextContentError || nextAmountError || nextEmailError) {
-      if(nextAmountError && amountDetails.current)amountDetails.current.open=true;
-      if(nextEmailError && emailDetails.current)emailDetails.current.open=true;
-      window.setTimeout(()=>errorSummary.current?.focus(),0);return;
+    const nextEmailError =
+      targetEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail)
+        ? "Please enter a valid email address or clear the field."
+        : "";
+    setCustomerError(nextCustomerError);
+    setContentError(nextContentError);
+    setAmountError(nextAmountError);
+    setEmailError(nextEmailError);
+    setSubmitError("");
+    if (
+      nextCustomerError ||
+      nextContentError ||
+      nextAmountError ||
+      nextEmailError
+    ) {
+      if (nextAmountError && amountDetails.current)
+        amountDetails.current.open = true;
+      if (nextEmailError && emailDetails.current)
+        emailDetails.current.open = true;
+      window.setTimeout(() => errorSummary.current?.focus(), 0);
+      return;
     }
-    if(listening)stopListening();
-    submissionStarted.current=true;setBusy(true);
+    if (listening) stopListening();
+    submissionStarted.current = true;
+    setBusy(true);
     try {
-      const snapshot=await draft.persist();
-      const request=buildRequest(initialRequest??null,{job:selectedJob,customer,note,requestType,customerCredits,knownChangeAmount});
-      request.id=draftId;
-      await queueDraftSubmission(snapshot,request);
-      onSubmit(()=>runDraftSubmission(draftId));
-    } catch(error) {
-      submissionStarted.current=false;setBusy(false);
-      setSubmitError(error instanceof Error?error.message:"Could not save the submission on this device. Keep this page open and retry.");
-      window.setTimeout(()=>errorSummary.current?.focus(),0);
+      const snapshot = await draft.persist();
+      // A workspace seed already knows its prior change orders. A directory job
+      // is matched by job number so a second or third submission continues the
+      // same running contract total.
+      const prior =
+        !initialRequest?.workspaceId && selectedJob
+          ? await priorChangesForJob(
+              requests,
+              selectedJob.jobNumber,
+              openRequest,
+            )
+          : undefined;
+      const request = buildRequest(initialRequest ?? null, {
+        job: selectedJob,
+        customer,
+        note,
+        requestType,
+        customerCredits,
+        knownChangeAmount,
+        prior,
+      });
+      request.id = draftId;
+      await queueDraftSubmission(snapshot, request);
+      onSubmit(() => runDraftSubmission(draftId));
+    } catch (error) {
+      submissionStarted.current = false;
+      setBusy(false);
+      setSubmitError(
+        error instanceof Error
+          ? error.message
+          : "Could not save the submission on this device. Keep this page open and retry.",
+      );
+      window.setTimeout(() => errorSummary.current?.focus(), 0);
     }
   };
 
@@ -505,7 +571,7 @@ export default function SimpleRequest(
         noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          submit();
+          void submit();
         }}
       >
         <header className="sr-head">

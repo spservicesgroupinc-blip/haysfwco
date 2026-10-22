@@ -69,18 +69,48 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isJobRecord(value: unknown): value is RestorationJobData {
-  return isPlainObject(value) && isPlainObject(value.customer) && isPlainObject(value.financials);
+  if (!isPlainObject(value) || !isPlainObject(value.customer) || !isPlainObject(value.financials)) return false;
+  const defaults = createEmptyJob();
+  const numeric = new Set(['totalApprovedRcv', 'deductible', 'roughEstimateAmount', 'depreciationAmount', 'originalContractSum', 'netPreviousChanges', 'changeAmount', 'addedDays']);
+  for (const section of ['customer', 'financials', 'insurance', 'team', 'branch', 'mortgage', 'productionNotes', 'changeOrder', 'checklist'] as const) {
+    if (value[section] === undefined) continue; // Old records may predate a section.
+    if (!isPlainObject(value[section])) return false;
+    for (const [key, field] of Object.entries(value[section])) {
+      const expected = (defaults[section] as unknown as Record<string, unknown>)[key];
+      if (expected === undefined) continue;
+      if (numeric.has(key)) {
+        if (field !== '' && (typeof field !== 'number' || !Number.isFinite(field))) return false;
+      } else if (typeof field !== typeof expected || typeof field === 'number' && !Number.isFinite(field)) return false;
+    }
+  }
+  return true;
 }
 
 function stableHash(text: string): string {
-  // djb2 — deterministic across devices so retries keep the same workspace id.
-  let hash = 5381;
-  for (let i = 0; i < text.length; i += 1) hash = ((hash << 5) + hash + text.charCodeAt(i)) >>> 0;
-  return hash.toString(16).padStart(8, '0') + text.length.toString(36);
+  // Independent 32-bit lanes provide a stable identity without a server call.
+  const lanes = [0x811c9dc5, 0x9e3779b9, 0x85ebca6b, 0xc2b2ae35];
+  for (let i = 0; i < text.length; i += 1) {
+    for (let lane = 0; lane < lanes.length; lane += 1) lanes[lane] = Math.imul(lanes[lane] ^ (text.charCodeAt(i) + lane), 16777619 + lane * 2) >>> 0;
+  }
+  return lanes.map(lane => lane.toString(16).padStart(8, '0')).join('') + text.length.toString(36);
 }
 
 function deepEqual(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b);
+  return canonical(a) === canonical(b);
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  if (isPlainObject(value)) return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical(value[key])}`).join(',')}}`;
+  return JSON.stringify(value) ?? 'null';
+}
+
+function assertSafeKeys(value: unknown): void {
+  if (Array.isArray(value)) value.forEach(assertSafeKeys);
+  else if (isPlainObject(value)) for (const [key, child] of Object.entries(value)) {
+    if (['__proto__', 'constructor', 'prototype'].includes(key)) throw new Error('The export contains an unsafe field name.');
+    assertSafeKeys(child);
+  }
 }
 
 /** Exact decimal dollars from a generator value; blanks and unknowns stay blank. */
@@ -103,6 +133,7 @@ export function parseWorkspaceExport(input: unknown): ParsedWorkspaceExport {
     }
   }
   if (!isPlainObject(value)) throw new Error('The export file is not valid JSON.');
+  assertSafeKeys(value);
   if (value.version !== EXPORT_VERSION) throw new Error('This export uses an unsupported version.');
   if (value.source !== EXPORT_SOURCE) throw new Error('This file was not exported by the document generator.');
   if (!Array.isArray(value.jobs)) throw new Error('The export is missing its jobs list.');
@@ -127,8 +158,10 @@ export function parseWorkspaceExport(input: unknown): ParsedWorkspaceExport {
 
   const pending: ExportedPendingEntry[] = value.pending.map((entry, index) => {
     if (!isPlainObject(entry)) throw new Error(`Pending action ${index + 1} in the export is invalid.`);
-    if (isPlainObject(entry.job) && !isJobRecord(entry.job)) throw new Error(`Pending action ${index + 1} has a missing or invalid record.`);
-    return entry as ExportedPendingEntry;
+    const job = entry.type === 'draft' && isPlainObject(entry.draft) ? entry.draft.job : entry.job;
+    if (entry.type !== 'delete' && !isJobRecord(job)) throw new Error(`Pending action ${index + 1} has a missing or invalid record.`);
+    if (!['save', 'draft', 'delete'].includes(String(entry.type))) throw new Error(`Pending action ${index + 1} has an unsupported type.`);
+    return { ...entry, ...(job ? { job } : {}) } as ExportedPendingEntry;
   });
 
   return {
@@ -163,9 +196,12 @@ function planItems(parsed: ParsedWorkspaceExport): SourceItem[] {
   }
   for (const [recordId, entries] of byRecordId) {
     const remote = entries.find((entry) => entry.origin === 'remote');
-    const kept = remote ? [remote] : entries.filter((entry) => entry.syncState !== 'synced');
+    const kept: ExportedJobEntry[] = [];
+    for (const entry of remote ? [remote, ...entries.filter(entry => entry !== remote)] : entries) {
+      if (!kept.some(other => deepEqual(other.record, entry.record))) kept.push(entry);
+    }
     for (const entry of kept) {
-      items.push({ variant: entry.origin === 'remote' ? 'remote' : 'device', sourceRecordId: recordId, record: entry.record });
+      items.push({ variant: entry.origin === 'device' ? 'device' : 'remote', sourceRecordId: recordId, record: entry.record });
     }
   }
   for (const draft of parsed.drafts) {
@@ -204,14 +240,24 @@ export function planWorkspaceMigration(parsed: ParsedWorkspaceExport, existing: 
 
   return items.map((item) => {
     const number = jobNumber(item.record);
+    const previous = existing.filter(workspace => workspace.migration?.source === EXPORT_SOURCE
+      && workspace.sourceRecordId === item.sourceRecordId && workspace.migration.variant === item.variant);
+    if (previous.some(workspace => deepEqual(item.record ?? null, workspace.migration?.original))) {
+      return { source: EXPORT_SOURCE, exportedAt: parsed.exportedAt, ...item, targetId: 'skip', candidates: [], note: 'This version was already imported. Saved edits are kept.' };
+    }
     if (item.variant === 'pending-delete') {
       return { source: EXPORT_SOURCE, exportedAt: parsed.exportedAt, variant: item.variant, sourceRecordId: item.sourceRecordId, targetId: 'new', candidates: [], note: 'A deletion was pending on the source device. The job was kept for review.' };
     }
     const record = item.record!;
-    const sourceTwins = (byNumber.get(number) ?? []).filter((twin) => twin !== item);
+    const sourceTwins = (byNumber.get(number) ?? []).filter((twin) => twin.sourceRecordId !== item.sourceRecordId);
     const candidates = number
       ? existing.filter((workspace) => jobNumber(workspace.record) === number)
       : [];
+
+    if (previous.length > 0 || item.variant === 'draft' || item.variant === 'pending-save'
+      || (item.variant === 'device' && items.some(other => other.sourceRecordId === item.sourceRecordId && other.variant === 'remote'))) {
+      return { source: EXPORT_SOURCE, exportedAt: parsed.exportedAt, ...item, targetId: 'new', candidates: [], note: 'Preserved as a separate review copy so saved corrections remain intact.' };
+    }
 
     if (sourceTwins.length > 0) {
       return { source: EXPORT_SOURCE, exportedAt: parsed.exportedAt, variant: item.variant, sourceRecordId: item.sourceRecordId, record, targetId: '', candidates: candidates.map((workspace) => workspace.id), note: 'More than one exported job uses this job number. Choose which saved job each one matches.' };
@@ -269,10 +315,23 @@ function migrationContext(item: MigrationPlanItem): { source: string; sourceReco
     source: item.source,
     sourceRecordId: item.sourceRecordId,
     variant: item.variant,
-    sourceKey: stableHash(JSON.stringify([item.source, item.exportedAt, item.variant, item.sourceRecordId, item.record ?? null])),
+    sourceKey: stableHash(canonical([item.source, item.variant, item.sourceRecordId, item.record ?? null])),
     importedAt: new Date().toISOString(),
     original: item.record === undefined ? null : structuredClone(item.record),
   };
+}
+
+/** Legacy extensions stay intact in migration.original; the live record follows the new backend contract. */
+function importRecord(source: RestorationJobData, withDefaults = true): RestorationJobData {
+  const normalized = withDefaults ? ensureRecordDefaults(structuredClone(source)) : structuredClone(source);
+  const result: Record<string, unknown> = {};
+  for (const key of ['recordId', 'id', 'dateCreated', 'updatedAt', 'schemaVersion'] as const) {
+    if (normalized[key] !== undefined) result[key] = normalized[key];
+  }
+  for (const section of ['customer', 'financials', 'insurance', 'team', 'branch', 'mortgage', 'productionNotes', 'changeOrder', 'checklist'] as const) {
+    if (normalized[section]) result[section] = Object.fromEntries(Object.entries(normalized[section]).filter(([, value]) => value === null || ['string', 'number', 'boolean'].includes(typeof value)));
+  }
+  return result as unknown as RestorationJobData;
 }
 
 /**
@@ -285,7 +344,7 @@ export function prepareWorkspaceImport(
   existing: Workspace[],
   targetId: string,
 ): { workspace: Workspace | null; conflicts: string[] } {
-  if (item.targetId === 'skip') return { workspace: null, conflicts: [] };
+  if (item.targetId === 'skip' || targetId === 'skip') return { workspace: null, conflicts: [] };
   if (targetId === '') throw new Error('Choose the saved job this export should merge into.');
   const match = targetId === 'new' ? undefined : existing.find((workspace) => workspace.id === targetId);
   if (targetId !== 'new' && !match) throw new Error('Choose the saved job this export should merge into.');
@@ -294,8 +353,18 @@ export function prepareWorkspaceImport(
   }
 
   if (targetId === 'new') {
-    const record = item.record ? ensureRecordDefaults(structuredClone(item.record)) : createEmptyJob();
+    const record = item.record ? importRecord(item.record) : createEmptyJob();
+    if (!item.record) {
+      record.customer.jobNumber = '';
+      record.customer.jobName = `Pending source deletion: ${item.sourceRecordId}`;
+    }
     const context = migrationContext(item);
+    const prior = existing.find(workspace => workspace.id === `ws-${context.sourceKey}` || workspace.migration?.sourceKey === context.sourceKey);
+    if (prior) {
+      if (prior.migration?.sourceRecordId === item.sourceRecordId && prior.migration.variant === item.variant
+        && deepEqual(prior.migration.original, item.record ?? null)) return { workspace: null, conflicts: [] };
+      throw new Error('This import identity conflicts with a saved job. Existing data was kept.');
+    }
     const workspace = createWorkspace(record);
     workspace.id = `ws-${context.sourceKey}`;
     workspace.record.recordId = workspace.id;
@@ -309,7 +378,7 @@ export function prepareWorkspaceImport(
   const merged: Workspace = structuredClone(match!);
   const conflicts: string[] = [];
   if (item.record) {
-    fillBlanks(merged.record as unknown as Record<string, unknown>, item.record as unknown as Record<string, unknown>, '', conflicts);
+    fillBlanks(merged.record as unknown as Record<string, unknown>, importRecord(item.record, false) as unknown as Record<string, unknown>, '', conflicts);
     merged.record = recalculateFinancials(merged.record);
   }
   merged.record.recordId = merged.id;

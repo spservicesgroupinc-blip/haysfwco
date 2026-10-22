@@ -721,6 +721,7 @@ export default function App() {
           <SimpleRequest
             key={requestDraft?.id || newRequestSeed?.id || "new"}
             jobs={jobs}
+            requests={requests}
             initialDraft={requestDraft}
             onLeaveGuard={registerLeaveGuard}
             initialRequest={newRequestSeed}
