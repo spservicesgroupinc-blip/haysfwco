@@ -31,6 +31,7 @@ import {
   flushWorkspace,
 } from "../services/workspaces";
 import { openRequest, fetchAttachment } from "../services/storage";
+import { priorChangesFrom } from "../services/changeOrder";
 import { customerDocumentFingerprint } from "../services/customerDocument";
 import { downloadBlob } from "../services/download";
 import { SectionCustomer } from "./components/SectionCustomer";
@@ -384,7 +385,17 @@ export default function JobWorkspace({
   async function newRequest() {
     await writes.current;
     await flushWorkspace(id);
-    onNewRequest(requestFromWorkspace(current.current!));
+    const frozen = current.current!;
+    // Each new request starts from every earlier change order on this job,
+    // not from a single “last amount” that would lose older corrections.
+    const prior = await priorChangesFrom(
+      requests.filter((request) => request.workspaceId === id),
+      openRequest,
+      frozen.previousChanges,
+    );
+    onNewRequest(
+      requestFromWorkspace(frozen, undefined, prior ?? undefined),
+    );
   }
 
   async function resolveConflict(choice: "device" | "server") {

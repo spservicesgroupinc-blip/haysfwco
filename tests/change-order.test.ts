@@ -8,6 +8,8 @@ import {
   finalDocumentError,
   pricingInputError,
   customerDocumentDraft,
+  priorChangeSummary,
+  priorChangesForJob,
 } from "../src/services/changeOrder";
 import { formatDashNote } from "../src/services/dashNote";
 import { createRequestedChange } from "../src/services/requests";
@@ -101,6 +103,55 @@ test("preparation carries the submitted amount into the estimator price and tota
     ["$12", ""],
   ] as const)
     assert.equal(signedAmountValue(input), expected, input);
+});
+
+test("later change orders roll up every earlier final price and submitted amount", async () => {
+  const baseline = "-20.05";
+  const first = createRequest();
+  first.createdAt = "2026-01-01T00:00:00.000Z";
+  first.job.jobNumber = "F-26-1";
+  first.job.previousChanges = baseline;
+  first.job.orderNumber = "CO-01";
+  first.finalChangeOrder = { scope: "First", amount: "+100.00" };
+  const second = createRequest();
+  second.createdAt = "2026-02-01T00:00:00.000Z";
+  second.job.jobNumber = "F-26-1";
+  second.job.previousChanges = "79.95";
+  second.job.orderNumber = "CO-02";
+  second.knownChangeAmount = "+50.00";
+
+  const summary = priorChangeSummary([first, second], baseline);
+  assert.equal(summary.previousChanges, "129.95");
+  assert.equal(summary.nextOrderNumber, "CO-03");
+  assert.equal(summary.pricedCount, 2);
+
+  // The estimator's saved price wins over the PM's submitted amount.
+  first.finalChangeOrder = { scope: "First", amount: "-25.00" };
+  assert.equal(priorChangeSummary([first], baseline).previousChanges, "-45.05");
+
+  // Invalid earlier prices are skipped rather than zeroed.
+  first.finalChangeOrder = { scope: "First", amount: "1e3" };
+  delete first.knownChangeAmount;
+  assert.equal(
+    priorChangeSummary([first], baseline).previousChanges,
+    "-20.05",
+  );
+
+  const loaded = await priorChangesForJob(
+    [
+      { id: first.id, job: first.job },
+      { id: second.id, job: second.job },
+      { id: "other-job", job: { ...second.job, jobNumber: "F-26-2" } },
+    ],
+    " f-26-1 ",
+    async (id) => {
+      if (id === first.id) return first;
+      if (id === second.id) return second;
+      throw new Error("not found");
+    },
+  );
+  assert.equal(loaded!.previousChanges, "29.95");
+  assert.equal(loaded!.nextOrderNumber, "CO-03");
 });
 
 test("preparation preserves estimator corrections and does not invent a price", () => {

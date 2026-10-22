@@ -200,6 +200,39 @@ for (const original of ['1000.01', '0', '']) test(`new request preserves origina
   expect(request.job.originalContract).not.toBe('1200.02');
 });
 
+test('a second change request continues from every earlier change order', async ({ page }) => {
+  const workspace = job();
+  const { backend } = await sandbox(page, [workspace]);
+  const first = createRequest();
+  first.workspaceId = workspace.id;
+  Object.assign(first.job, {
+    customer: workspace.record.customer.customerName,
+    jobNumber: workspace.record.customer.jobNumber,
+    originalContract: workspace.originalContract,
+    previousChanges: workspace.previousChanges,
+    orderNumber: 'CO-01',
+  });
+  first.finalChangeOrder = { scope: 'First change', amount: '+100.00' };
+  const seeded = backend.post({ action: 'saveRequest', request: first, expectedRevision: 0, mutationId: 'seed-first' });
+  expect(seeded.ok, seeded.error).toBe(true);
+
+  await openJob(page, workspace);
+  await expect(page.getByRole('button', { name: 'Change Requests (1)', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'New change request', exact: true }).click();
+  await expect(page.getByLabel('Customer / job')).toHaveValue('Workspace Customer — FW-TEST-1');
+  await page.getByLabel('What changed?', { exact: true }).fill('Second change');
+  await page.getByRole('button', { name: 'Send to estimating', exact: true }).click();
+  await expect.poll(() => backend.get({ action: 'listRequests' }).requests.length).toBe(2);
+
+  const summaries = backend.get({ action: 'listRequests' }).requests;
+  const secondSummary = summaries.find((item: any) => item.id !== first.id);
+  const second = backend.get({ action: 'openRequest', id: secondSummary.id }).request;
+  expect(second).toMatchObject({
+    workspaceId: workspace.id,
+    job: { previousChanges: '79.95', orderNumber: 'CO-02' },
+  });
+});
+
 test('connecting an existing request changes only its workspace metadata', async ({ page }) => {
   const workspace = job();
   const { backend } = await sandbox(page, [workspace]);

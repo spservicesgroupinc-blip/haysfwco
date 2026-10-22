@@ -8,6 +8,7 @@ import {
   recalculateFinancials,
 } from "../src/workspaces/model";
 import { createRequest } from "../src/services/requests";
+import { priorChangeSummary } from "../src/services/changeOrder";
 
 test("job workspaces keep RCV separate from the original contract and preserve explicit zero", () => {
   const workspace = createWorkspace();
@@ -20,6 +21,27 @@ test("job workspaces keep RCV separate from the original contract and preserve e
   assert.equal(request.job.previousChanges, "-25.19");
   assert.equal(request.finalChangeOrder, undefined);
   assert.equal(workspace.record.financials.totalApprovedRcv, 5000);
+});
+
+test("a new request continues from every earlier change order on the job", () => {
+  const workspace = createWorkspace();
+  workspace.previousChanges = "-20.05";
+  const first = createRequest();
+  first.job.orderNumber = "CO-01";
+  first.job.previousChanges = "-20.05";
+  first.finalChangeOrder = { scope: "First", amount: "+100.00" };
+  const second = createRequest();
+  second.job.orderNumber = "CO-02";
+  second.job.previousChanges = "79.95";
+  second.finalChangeOrder = { scope: "Second", amount: "+50.00" };
+  const request = requestFromWorkspace(
+    workspace,
+    undefined,
+    priorChangeSummary([first, second], workspace.previousChanges),
+  );
+  assert.equal(request.job.previousChanges, "129.95");
+  assert.equal(request.job.orderNumber, "CO-03");
+  assert.equal(request.finalChangeOrder, undefined);
 });
 
 test("prefilling new requests never rewrites an existing snapshot or estimator corrections", () => {

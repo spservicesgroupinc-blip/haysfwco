@@ -709,6 +709,7 @@ export default function App() {
           <SimpleRequest
             key={newRequestSeed?.id || "new"}
             jobs={jobs}
+            requests={requests}
             initialRequest={newRequestSeed}
             onSubmit={submitQuickRequest}
           />

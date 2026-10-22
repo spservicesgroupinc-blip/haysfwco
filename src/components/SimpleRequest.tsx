@@ -14,9 +14,18 @@ import {
   Send,
   X,
 } from "lucide-react";
-import { newId, type ChangeRequest, type JobEntry } from "../types";
+import {
+  newId,
+  type ChangeRequest,
+  type JobEntry,
+  type RequestSummary,
+} from "../types";
 import { createRequest, createRequestedChange } from "../services/requests";
-import { blobToBase64 } from "../services/storage";
+import { blobToBase64, openRequest } from "../services/storage";
+import {
+  priorChangesForJob,
+  type PriorChangeSummary,
+} from "../services/changeOrder";
 import { createRequestSubmission } from "../services/requestSubmission";
 import {
   looksLikePhotoFile,
@@ -31,6 +40,8 @@ import "./SimpleRequest.css";
 export interface SimpleRequestProps {
   /** The admin-managed customer/job directory. */
   jobs: JobEntry[];
+  /** Dashboard summaries, used to roll earlier change orders for the job. */
+  requests: RequestSummary[];
   /** Fresh request seeded from a permanent job workspace. */
   initialRequest?: ChangeRequest;
   /** The shell runs the task after returning home and owns its notification. */
@@ -114,7 +125,12 @@ const VOICE_ERRORS: Record<string, string | undefined> = {
  */
 function buildRequest(
   base: ChangeRequest | null,
-  details: { job: JobEntry | null; customer: string; note: string } & Pick<
+  details: {
+    job: JobEntry | null;
+    customer: string;
+    note: string;
+    prior?: PriorChangeSummary | null;
+  } & Pick<
     ChangeRequest,
     "requestType" | "customerCredits" | "knownChangeAmount"
   >,
@@ -143,6 +159,14 @@ function buildRequest(
       // blank entry never wipes an amount the request already holds.
       ...(details.job?.contractAmount
         ? { originalContract: details.job.contractAmount }
+        : {}),
+      // A new change order continues the job's running total; the workspace
+      // seed already carries its own rolled-up values.
+      ...(details.prior
+        ? {
+            previousChanges: details.prior.previousChanges,
+            orderNumber: details.prior.nextOrderNumber,
+          }
         : {}),
     },
     requestedChanges: description
@@ -217,7 +241,7 @@ function PhotoTile({
 export default function SimpleRequest(
   props: SimpleRequestProps,
 ): React.ReactElement {
-  const { jobs, onSubmit, initialRequest } = props;
+  const { jobs, requests, onSubmit, initialRequest } = props;
   // Only active directory rows are offered; without any, the page falls back to
   // a typed customer name so it still works.
   const seededJob: JobEntry | undefined = initialRequest?.workspaceId
@@ -451,7 +475,7 @@ export default function SimpleRequest(
     }
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (submissionStarted.current) return;
     const customer = (selectedJob?.customer ?? customerText).trim();
     const nextCustomerError = customer
@@ -485,6 +509,17 @@ export default function SimpleRequest(
     if (listening) stopListening();
     submissionStarted.current = true;
     setBusy(true);
+    // A workspace seed already knows its prior change orders. A directory job
+    // is matched by job number so a second or third submission continues the
+    // same running contract total.
+    const prior =
+      !initialRequest?.workspaceId && selectedJob
+        ? await priorChangesForJob(
+            requests,
+            selectedJob.jobNumber,
+            openRequest,
+          )
+        : undefined;
     const request = buildRequest(initialRequest ?? null, {
       job: selectedJob,
       customer,
@@ -492,6 +527,7 @@ export default function SimpleRequest(
       requestType,
       customerCredits,
       knownChangeAmount,
+      prior,
     });
     onSubmit(
       createRequestSubmission(
@@ -538,7 +574,7 @@ export default function SimpleRequest(
         noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          submit();
+          void submit();
         }}
       >
         <header className="sr-head">

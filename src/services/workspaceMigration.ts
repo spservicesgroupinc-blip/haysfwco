@@ -1,4 +1,5 @@
 /**
+ * 
  * Migration from the haysdocuments-2 document generator into the combined app.
  *
  * The generator kept remote/cache job copies, device drafts and an offline

@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { createRequest } from "../src/services/requests";
 
 /**
  * The quick request tab is the project manager's phone-first intake: pick the
@@ -69,8 +70,11 @@ interface MockApi {
 async function installMockApi(
   page: Page,
   directory: typeof jobs = jobs,
+  seedRequests: Record<string, any>[] = [],
 ): Promise<MockApi> {
-  const requests = new Map<string, any>();
+  const requests = new Map<string, any>(
+    seedRequests.map((request) => [request.id, request]),
+  );
   // Files the upload endpoint is holding, keyed the way the Apps Script does.
   const uploadedFiles = new Map<
     string,
@@ -437,6 +441,35 @@ for (const [sign, button] of [
     expect(errors).toEqual([]);
   });
 }
+
+test("a second quick request continues the job's previous change total", async ({
+  page,
+}) => {
+  const first = {
+    ...createRequest(),
+    id: "prior-change",
+    createdAt: "2026-01-01T00:00:00.000Z",
+  };
+  first.job.jobNumber = "F-26-0366-P";
+  first.job.customer = "York Ridge Apartments";
+  first.job.orderNumber = "CO-01";
+  first.job.previousChanges = "0.00";
+  first.finalChangeOrder = { scope: "First change", amount: "+100.00" };
+  const api = await installMockApi(page, jobs, [first]);
+  await page.goto("/");
+  await page.getByRole("button", { name: "New request", exact: true }).click();
+  await pickCustomer(page, "York Ridge Apartments");
+  await page
+    .getByLabel("What changed?", { exact: true })
+    .fill("Second change order");
+  await page
+    .getByRole("button", { name: "Send to estimating", exact: true })
+    .click();
+  await expect(page.getByText(/Sent to estimating/)).toBeVisible();
+  expect(api.saved).toHaveLength(1);
+  expect(api.saved[0].job.previousChanges).toBe("100.00");
+  expect(api.saved[0].job.orderNumber).toBe("CO-02");
+});
 
 test("invalid known amounts block saving, and clearing the amount leaves it optional", async ({
   page,

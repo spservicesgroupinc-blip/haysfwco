@@ -18,6 +18,12 @@ export function formatCents(value: bigint): string {
   return `${value < 0n ? "-" : ""}$${dollars}.${(absolute % 100n).toString().padStart(2, "0")}`;
 }
 
+/** Canonical decimal dollars without a currency symbol, e.g. "-1250.19". */
+export function decimalCents(value: bigint): string {
+  const absolute = value < 0n ? -value : value;
+  return `${value < 0n ? "-" : ""}${absolute / 100n}.${(absolute % 100n).toString().padStart(2, "0")}`;
+}
+
 export function contractAmounts(
   job: Pick<JobDetails, "originalContract" | "previousChanges">,
 ) {
