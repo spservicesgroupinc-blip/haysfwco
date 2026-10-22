@@ -517,7 +517,7 @@ test("estimator edits the PDF, saves a credit, and downloads the stored document
   expect(errors).toEqual([]);
 });
 
-test("submitted scope fills the form but the final price starts blank", async ({
+test("submitted amount fills the estimator price and new contract total", async ({
   page,
 }) => {
   const api = await installMockApi(page, {
@@ -536,22 +536,21 @@ test("submitted scope fills the form but the final price starts blank", async ({
   ).toHaveValue(baseRequest.requestedChanges[0].description);
   await expect(
     editor.getByLabel("Final change amount", { exact: true }),
-  ).toHaveValue("");
+  ).toHaveValue("999.00");
+  await expect(
+    editor.getByRole("button", { name: "Increase", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    editor.getByText("New contract total: $168,044.81", { exact: true }),
+  ).toBeVisible();
   await editor
     .getByRole("button", { name: "Generate & save PDF", exact: true })
     .click();
-  await expect(editor.getByRole("alert")).toContainText(
-    "Enter a final change amount",
-  );
-  expect(api.uploads).toHaveLength(0);
-  await editor
-    .getByRole("button", { name: "Save changes", exact: true })
-    .click();
   await expect(
-    editor.getByRole("status").filter({ hasText: "changes saved" }),
+    editor.getByText("Change order and customer PDF saved.", { exact: true }),
   ).toBeVisible();
   expect(api.requests.get("r1").lineNumbers).toBe("+12, -34");
-  expect(api.requests.get("r1").finalChangeOrder.amount).toBe("");
+  expect(api.requests.get("r1").finalChangeOrder.amount).toBe("+999.00");
 });
 
 for (const failure of ["save", "upload", "afterSave"] as const) {

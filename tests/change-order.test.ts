@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createRequest } from "../src/services/requests";
 import {
   signedMoneyCents,
+  signedAmountValue,
   finalContractTotal,
   finalDocumentError,
   pricingInputError,
@@ -61,6 +62,45 @@ test("document preparation inherits scope entries and job information, with no s
       "Kitchen - remove work",
     ),
   );
+});
+
+test("preparation carries the submitted amount into the estimator price and totals it", () => {
+  const request = createRequest();
+  request.job.originalContract = "1000.00";
+  request.knownChangeAmount = "+1250.19";
+  const draft = customerDocumentDraft(request);
+  assert.equal(draft.finalChangeOrder!.amount, "+1250.19");
+  assert.equal(finalContractTotal(draft), "$2,250.19");
+
+  request.knownChangeAmount = "-250";
+  assert.equal(customerDocumentDraft(request).finalChangeOrder!.amount, "-250.00");
+  assert.equal(finalContractTotal(customerDocumentDraft(request)), "$750.00");
+
+  // An estimator's saved correction always wins over the submitted amount.
+  request.finalChangeOrder = { scope: "Estimator price", amount: "-125.50" };
+  assert.equal(
+    customerDocumentDraft(request).finalChangeOrder!.amount,
+    "-125.50",
+  );
+  assert.equal(finalContractTotal(customerDocumentDraft(request)), "$874.50");
+
+  // Absent or malformed submitted amounts never invent a price.
+  request.finalChangeOrder = undefined;
+  delete request.knownChangeAmount;
+  assert.equal(customerDocumentDraft(request).finalChangeOrder!.amount, "");
+  request.knownChangeAmount = "not-a-number";
+  assert.equal(customerDocumentDraft(request).finalChangeOrder!.amount, "");
+
+  for (const [input, expected] of [
+    ["+1250.19", "+1250.19"],
+    ["-250", "-250.00"],
+    ["0", "+0.00"],
+    ["12.5", "+12.50"],
+    ["", ""],
+    ["1e3", ""],
+    ["$12", ""],
+  ] as const)
+    assert.equal(signedAmountValue(input), expected, input);
 });
 
 test("preparation preserves estimator corrections and does not invent a price", () => {
