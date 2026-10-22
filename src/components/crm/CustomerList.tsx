@@ -144,7 +144,7 @@ export default function CustomerList({ onOpen }: CustomerListProps) {
           <p className="crm-empty">
             {customers.length
               ? "No customers match your search."
-              : "No customers yet. Add your first customer to start tracking jobs and follow-ups."}
+              : "No customers yet. Import jobs on the Jobs page and every customer on the report is added here, or add one manually."}
           </p>
         )}
       </div>

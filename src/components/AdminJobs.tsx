@@ -3,6 +3,7 @@ import { CheckCircle2, FileSpreadsheet, ListChecks, Upload, X } from "lucide-rea
 import type { JobEntry } from "../types";
 import { parseJobReport, type JobImportResult } from "../services/jobImport";
 import { importJobs } from "../services/storage";
+import { syncCustomersFromJobs } from "../crm";
 import "./AdminJobs.css";
 
 export interface AdminJobsProps {
@@ -51,7 +52,18 @@ export default function AdminJobs({ jobs, onImported }: AdminJobsProps) {
     try {
       const imported = await importJobs(preview.jobs);
       onImported(imported);
-      setSuccess(`Successfully imported ${imported.length} jobs for auto-complete.`);
+      // The uploaded jobs are the customer list: every customer on the report
+      // becomes a customer record (or fills in the details it was missing).
+      const synced = await syncCustomersFromJobs(imported).catch(() => null);
+      const added = synced?.created.length ?? 0;
+      const filled = synced?.updated.length ?? 0;
+      setSuccess(
+        `Successfully imported ${imported.length} jobs for auto-complete.${
+          added || filled
+            ? ` Customer directory updated — ${added} added, ${filled} completed.`
+            : ""
+        }`,
+      );
       setPreview(null);
       setCsvText("");
       if (fileInputRef.current) fileInputRef.current.value = "";

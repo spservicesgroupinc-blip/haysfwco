@@ -28,5 +28,13 @@ Status: complete (2026-10-22). All implementation items built and verified.
 - [x] npm run build clean
 - [x] Playwright CRM spec green
 
+## Job directory → customer directory sync (2026-10-22)
+- [x] src/crm/jobSync.ts: syncCustomersFromJobs (upsert by normalized name, fill blanks only, link saved jobs by job number then name)
+- [x] sync.ts: stageCustomers batches one emit/sync pass for a whole import
+- [x] AdminJobs import runs the sync; App.refresh syncs on every dashboard load; JobsDocuments links when a directory job is opened
+- [x] listCustomers jobCount includes uploaded directory jobs (deduped with linked jobs by job number)
+- [x] Offline seed jobs (`DashboardData.jobsAreDemo`) never become customers; sync runs are serialized so StrictMode's double mount cannot duplicate them
+- [x] tests/crm-job-sync.test.ts green (npm test: 131 passed)
+
 ## Outstanding (deployment only)
 - [ ] Manual redeploy of `apps-script/Code.gs` to the live Apps Script web app (no CI deploy)

@@ -15,6 +15,7 @@ import {
 } from "../services/workspaces";
 import { syncWorkspaces } from "../services/workspaces";
 import { importWorkspaceLocally } from "../workspaces/importStore";
+import { syncCustomersFromJobs } from "../crm";
 import JobWorkspace from "./JobWorkspace";
 import { CustomerImportPage } from "./components/CustomerImportPage";
 import WorkspaceMigration from "./WorkspaceMigration";
@@ -95,6 +96,8 @@ export default function JobsDocuments({
         ? workspaceFromDirectory(entry)
         : createWorkspace();
       await saveWorkspaceLocally(workspace);
+      // Opening a job from the directory registers its customer and links it.
+      if (entry) await syncCustomersFromJobs([entry]).catch(() => undefined);
       onOpenWorkspace(workspace.id);
     } catch (value) {
       setError(value instanceof Error ? value.message : String(value));

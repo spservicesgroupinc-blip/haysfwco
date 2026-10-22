@@ -89,6 +89,27 @@ export async function stageCustomer(
   schedule(0);
 }
 
+/**
+ * Stages many customers behind a single notification and sync pass, so a job
+ * import creating a whole directory doesn't re-render the list per customer.
+ */
+export async function stageCustomers(
+  records: { customer: Customer; expectedRevision: number }[],
+): Promise<void> {
+  if (!records.length) return;
+  for (const record of records) {
+    await putCustomerSilent(record.customer);
+    pending.set(key("customer", record.customer.id), {
+      kind: "customer",
+      entity: structuredClone(record.customer),
+      expectedRevision: record.expectedRevision,
+      mutationId: crypto.randomUUID(),
+    });
+  }
+  emitCrm();
+  schedule(0);
+}
+
 export async function stageTask(
   task: Task,
   expectedRevision: number,

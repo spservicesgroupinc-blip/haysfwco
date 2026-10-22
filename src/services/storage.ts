@@ -40,7 +40,6 @@ function env(name: string): string | undefined {
 const STORAGE_KEY_REQUESTS = "hays_change_orders_requests";
 const STORAGE_KEY_JOBS = "hays_change_orders_jobs";
 const STORAGE_KEY_ATTACHMENTS = "hays_change_orders_attachments";
-
 // Seed data used when running offline or in demo mode without remote Google Sheets
 const INITIAL_DEMO_JOBS: JobEntry[] = [
   {
@@ -213,6 +212,23 @@ function saveLocalJobs(items: JobEntry[]): void {
     localStorage.setItem(STORAGE_KEY_JOBS, JSON.stringify(items));
   } catch {
     // quota exceeded or private mode
+  }
+}
+
+/**
+ * The job directory the app last loaded from the backend. Unlike
+ * `getLocalJobs` this never invents demo rows, so callers can trust it as
+ * evidence that a job was really imported.
+ */
+export function cachedJobDirectory(): JobEntry[] {
+  if (typeof localStorage === "undefined") return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_JOBS);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as JobEntry[]) : [];
+  } catch {
+    return [];
   }
 }
 
@@ -672,6 +688,8 @@ export async function sendRequestEmail(
 export interface DashboardData {
   requests: RequestSummary[];
   jobs: JobEntry[];
+  /** True when the job list is the offline seed, not something a user imported. */
+  jobsAreDemo?: boolean;
 }
 
 export async function loadDashboard(): Promise<DashboardData> {
@@ -703,6 +721,8 @@ export async function loadDashboard(): Promise<DashboardData> {
       return {
         requests: getLocalRequests().map(summarizeRequest),
         jobs: getLocalJobs(),
+        // Nothing was ever saved, so this is the built-in seed, not a report.
+        jobsAreDemo: cachedJobDirectory().length === 0,
       };
     }
   }

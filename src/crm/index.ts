@@ -20,6 +20,8 @@ import {
   putCustomer,
   putCustomerSilent,
 } from "./store";
+import { customerNameKey, jobNumberKey } from "./jobSync";
+import { cachedJobDirectory } from "../services/storage";
 import { readWorkspaceRow, readWorkspaceRows } from "../workspaces/localStore";
 import { saveWorkspaceLocally } from "../services/workspaces";
 import type {
@@ -52,6 +54,13 @@ export type {
 
 export { startCrmSync, subscribeCrm };
 
+export { syncCustomersFromJobs } from "./jobSync";
+export type { JobCustomerSyncResult } from "./jobSync";
+
+/** A job is one number; unnamed jobs fall back to their own row id. */
+const jobIdentity = (jobNumber: string | undefined, fallback: string) =>
+  jobNumberKey(jobNumber) ? `job:${jobNumberKey(jobNumber)}` : fallback;
+
 export async function listCustomers(): Promise<CustomerSummary[]> {
   await refreshCustomersFromServer().catch(() => undefined);
   const [customers, workspaceRows, tasks] = await Promise.all([
@@ -59,6 +68,42 @@ export async function listCustomers(): Promise<CustomerSummary[]> {
     readWorkspaceRows(),
     listAllLocalTasks(),
   ]);
+  const tasksOpen = new Map<string, number>();
+  for (const task of tasks) {
+    if (task.status !== "open") continue;
+    tasksOpen.set(task.customerId, (tasksOpen.get(task.customerId) ?? 0) + 1);
+  }
+
+  // The directory mirrors the uploaded job report, so a customer's job count
+  // includes jobs that have not been opened as a workspace yet.
+  const jobsByCustomer = new Map<string, Set<string>>();
+  const customerIdByName = new Map<string, string>();
+  for (const customer of customers) {
+    const key = customerNameKey(customer.name);
+    if (key && !customerIdByName.has(key)) customerIdByName.set(key, customer.id);
+  }
+  const countJob = (customerId: string, identity: string) => {
+    const jobs = jobsByCustomer.get(customerId) ?? new Set<string>();
+    jobs.add(identity);
+    jobsByCustomer.set(customerId, jobs);
+  };
+  for (const row of workspaceRows) {
+    const customerId = row.workspace.customerId;
+    if (!customerId) continue;
+    countJob(
+      customerId,
+      jobIdentity(
+        row.workspace.record.customer.jobNumber,
+        `workspace:${row.workspace.id}`,
+      ),
+    );
+  }
+  for (const job of cachedJobDirectory()) {
+    const customerId = customerIdByName.get(customerNameKey(job.customer));
+    if (!customerId) continue;
+    countJob(customerId, jobIdentity(job.jobNumber, `directory:${job.id}`));
+  }
+
   return customers.map((customer) => ({
     id: customer.id,
     name: customer.name,
@@ -67,12 +112,8 @@ export async function listCustomers(): Promise<CustomerSummary[]> {
     address: customer.address,
     tags: customer.tags,
     updatedAt: customer.updatedAt,
-    jobCount: workspaceRows.filter(
-      (row) => row.workspace.customerId === customer.id,
-    ).length,
-    openTaskCount: tasks.filter(
-      (task) => task.customerId === customer.id && task.status === "open",
-    ).length,
+    jobCount: jobsByCustomer.get(customer.id)?.size ?? 0,
+    openTaskCount: tasksOpen.get(customer.id) ?? 0,
   }));
 }
 
