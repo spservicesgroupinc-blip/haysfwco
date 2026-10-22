@@ -59,11 +59,15 @@ function setup() {
   jobsSheet_();
   workspacesSheet_();
   jobDocumentsSheet_();
+  customersSheet_();
+  customerActivitiesSheet_();
+  tasksSheet_();
   const summary = [
     "Setup complete.",
     "Requests sheet: Requests",
     "Jobs sheet: Jobs",
     "Workspace sheets: Workspaces, JobDocuments (independent of CSV imports)",
+    "CRM sheets: Customers, CustomerActivities, Tasks",
     "Drive folder: " + folder.getName(),
     "",
     "Then: Deploy → New deployment → Web app",
@@ -128,6 +132,14 @@ function doPost(e) {
   if (body.action === "getCustomerReference") return guarded_(function () { return json_({ ok: true, reference: getCustomerReference_() }); });
   if (body.action === "replaceCustomerReference") return guarded_(function () { return json_({ ok: true, reference: replaceCustomerReference_(body) }); });
   if (body.action === "analyzeIntake") return guarded_(function () { return json_({ ok: true, analysis: analyzeIntake_(body) }); });
+  if (body.action === "listCustomers") return guarded_(function () { return listCustomers_(); });
+  if (body.action === "openCustomer") return guarded_(function () { return openCustomer_(body.customerId); });
+  if (body.action === "saveCustomer") return guarded_(function () { return saveCustomer_(body); });
+  if (body.action === "mergeCustomers") return guarded_(function () { return mergeCustomers_(body); });
+  if (body.action === "listActivities") return guarded_(function () { return listActivities_(body.customerId); });
+  if (body.action === "addActivity") return guarded_(function () { return addActivity_(body); });
+  if (body.action === "listTasks") return guarded_(function () { return listTasks_(body.customerId); });
+  if (body.action === "saveTask") return guarded_(function () { return saveTask_(body); });
   return fail_("Unknown action.");
 }
 
@@ -503,6 +515,7 @@ function fetchAttachment_(requestId, attachmentId) {
 // Sheets contains only small indexes, so long production notes never hit cell limits.
 const WORKSPACE_HEADERS = ["id", "revision", "updatedAt", "dataFileId", "previousDataFileId", "folderId"];
 const WC = { ID: 0, REVISION: 1, UPDATED: 2, DATA: 3, PREVIOUS: 4, FOLDER: 5 };
+const JOB_STAGES = ["lead", "in_progress", "complete", "closed"];
 const JOB_DOCUMENT_HEADERS = ["id", "workspaceId", "name", "kind", "driveFileId", "inputFingerprint", "templateVersion", "createdAt", "mutationId", "payloadHash"];
 function integrationSheet_(name, headers) {
   const ss = spreadsheet_(); let sheet = ss.getSheetByName(name);
@@ -511,6 +524,294 @@ function integrationSheet_(name, headers) {
 }
 function workspacesSheet_() { return integrationSheet_("Workspaces", WORKSPACE_HEADERS); }
 function jobDocumentsSheet_() { return integrationSheet_("JobDocuments", JOB_DOCUMENT_HEADERS); }
+
+// ---- CRM: Customers, unified activity timeline, and follow-up tasks ---------
+// Customers and Tasks are small rows stored entirely in Sheets; the "data"
+// column holds a JSON envelope ({ customer | task, mutations }) so mutation
+// receipts survive retries exactly like workspace snapshots do in Drive.
+// Activities are append-only with a dedicated mutationId column.
+const CUSTOMER_HEADERS = ["id", "name", "phone", "email", "updatedAt", "data"];
+const CC = { ID: 0, NAME: 1, PHONE: 2, EMAIL: 3, UPDATED: 4, DATA: 5 };
+const CUSTOMER_ACTIVITY_HEADERS = ["id", "customerId", "at", "mutationId", "data"];
+const AC = { ID: 0, CUSTOMER: 1, AT: 2, MUTATION: 3, DATA: 4 };
+const TASK_HEADERS = ["id", "customerId", "updatedAt", "data"];
+const TC = { ID: 0, CUSTOMER: 1, UPDATED: 2, DATA: 3 };
+const CRM_DATA_LIMIT = 45000;
+
+function customersSheet_() { return integrationSheet_("Customers", CUSTOMER_HEADERS); }
+function customerActivitiesSheet_() { return integrationSheet_("CustomerActivities", CUSTOMER_ACTIVITY_HEADERS); }
+function tasksSheet_() { return integrationSheet_("Tasks", TASK_HEADERS); }
+function customerRows_() { return integrationRows_(customersSheet_(), CUSTOMER_HEADERS.length).filter(function(values) { return String(values[CC.ID]); }); }
+function activityRows_() { return integrationRows_(customerActivitiesSheet_(), CUSTOMER_ACTIVITY_HEADERS.length).filter(function(values) { return String(values[AC.ID]); }); }
+function taskRows_() { return integrationRows_(tasksSheet_(), TASK_HEADERS.length).filter(function(values) { return String(values[TC.ID]); }); }
+
+function crmText_(value, label, maxLength) {
+  if (typeof value !== "string" || value.length > maxLength) problem_("VALIDATION", "Invalid " + label + ".");
+  return value;
+}
+function optionalCrmText_(input, key, label, maxLength) {
+  if (input[key] === undefined) return undefined;
+  return crmText_(input[key], label, maxLength);
+}
+function crmData_(value, label) {
+  const text = JSON.stringify(value);
+  if (text.length > CRM_DATA_LIMIT) problem_("VALIDATION", label + " is too large to save.");
+  return text;
+}
+function rememberRecentMutations_(mutations) {
+  const keys = Object.keys(mutations);
+  if (keys.length > 100) keys.slice(0, keys.length - 100).forEach(function(key) { delete mutations[key]; });
+}
+
+function customerShape_(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) problem_("VALIDATION", "A customer record is required.");
+  const id = workspaceIdentifier_(input.id, "customer");
+  if (typeof input.name !== "string" || !input.name.trim() || input.name.length > 300) problem_("VALIDATION", "A customer name is required.");
+  const result = { id: id, revision: 0, createdAt: "", updatedAt: "", name: input.name.trim() };
+  ["phone", "email", "address", "cityStateZip"].forEach(function(key) {
+    const value = optionalCrmText_(input, key, "customer " + key, key === "email" ? 300 : 1000);
+    if (value !== undefined) result[key] = value.trim();
+  });
+  if (input.tags !== undefined) {
+    if (!Array.isArray(input.tags) || input.tags.length > 100) problem_("VALIDATION", "Customer tags must be a short list.");
+    result.tags = input.tags.map(function(tag) {
+      if (typeof tag !== "string" || tag.length > 100) problem_("VALIDATION", "Invalid customer tag.");
+      return tag;
+    });
+  }
+  if (input.mergedFromIds !== undefined) {
+    if (!Array.isArray(input.mergedFromIds) || input.mergedFromIds.length > 1000) problem_("VALIDATION", "Merged customer list is too large.");
+    const seen = {}; const merged = [];
+    input.mergedFromIds.forEach(function(value) { const v = workspaceIdentifier_(value, "merged customer"); if (!seen[v]) { seen[v] = true; merged.push(v); } });
+    result.mergedFromIds = merged;
+  }
+  boundedJson_(result, 0);
+  return result;
+}
+
+function activityShape_(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) problem_("VALIDATION", "An activity is required.");
+  const id = workspaceIdentifier_(input.id, "activity");
+  const customerId = workspaceIdentifier_(input.customerId, "customer");
+  if (typeof input.kind !== "string" || !input.kind.trim() || input.kind.length > 100) problem_("VALIDATION", "An activity kind is required.");
+  if (["inbound", "outbound", "system"].indexOf(input.direction) < 0) problem_("VALIDATION", "An activity direction is required.");
+  if (typeof input.body !== "string") problem_("VALIDATION", "An activity body is required.");
+  if (typeof input.at !== "string" || !input.at || input.at.length > 300) problem_("VALIDATION", "An activity time is required.");
+  const result = { id: id, customerId: customerId, kind: input.kind.trim(), direction: input.direction, body: input.body.slice(0, 100000), at: input.at };
+  const workspaceId = optionalCrmText_(input, "workspaceId", "activity workspace", 100);
+  if (workspaceId !== undefined) result.workspaceId = workspaceId;
+  const by = optionalCrmText_(input, "by", "activity author", 300);
+  if (by !== undefined) result.by = by;
+  boundedJson_(result, 0);
+  return result;
+}
+
+function taskShape_(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) problem_("VALIDATION", "A task is required.");
+  const id = workspaceIdentifier_(input.id, "task");
+  const customerId = workspaceIdentifier_(input.customerId, "customer");
+  if (typeof input.title !== "string" || !input.title.trim() || input.title.length > 1000) problem_("VALIDATION", "A task title is required.");
+  if (["open", "done"].indexOf(input.status) < 0) problem_("VALIDATION", "A task status must be open or done.");
+  const result = { id: id, customerId: customerId, title: input.title.trim(), status: input.status, revision: 0, createdAt: "" };
+  const workspaceId = optionalCrmText_(input, "workspaceId", "task workspace", 100);
+  if (workspaceId !== undefined) result.workspaceId = workspaceId;
+  ["dueDate", "assignee", "completedAt"].forEach(function(key) {
+    const value = optionalCrmText_(input, key, "task " + key, 300);
+    if (value !== undefined) result[key] = value.trim();
+  });
+  boundedJson_(result, 0);
+  return result;
+}
+
+function readCustomer_(values) {
+  let envelope;
+  try { envelope = JSON.parse(String(values[CC.DATA])); } catch (error) { problem_("DATA_UNAVAILABLE", "The customer record could not be loaded."); }
+  if (!envelope || !envelope.customer || envelope.customer.id !== String(values[CC.ID])) problem_("DATA_UNAVAILABLE", "The customer record could not be loaded.");
+  return envelope;
+}
+function customerRow_(id) {
+  const rows = customerRows_();
+  for (let i = 0; i < rows.length; i++) if (String(rows[i][CC.ID]) === id) { const envelope = readCustomer_(rows[i]); return { row: i + 2, values: rows[i], customer: envelope.customer, mutations: envelope.mutations || {} }; }
+  return null;
+}
+function readTask_(values) {
+  let envelope;
+  try { envelope = JSON.parse(String(values[TC.DATA])); } catch (error) { problem_("DATA_UNAVAILABLE", "The task could not be loaded."); }
+  if (!envelope || !envelope.task || envelope.task.id !== String(values[TC.ID])) problem_("DATA_UNAVAILABLE", "The task could not be loaded.");
+  return envelope;
+}
+function taskRow_(id) {
+  const rows = taskRows_();
+  for (let i = 0; i < rows.length; i++) if (String(rows[i][TC.ID]) === id) { const envelope = readTask_(rows[i]); return { row: i + 2, values: rows[i], task: envelope.task, mutations: envelope.mutations || {} }; }
+  return null;
+}
+function activityRow_(values) {
+  let activity;
+  try { activity = JSON.parse(String(values[AC.DATA])); } catch (error) { problem_("DATA_UNAVAILABLE", "An activity could not be loaded."); }
+  if (!activity || activity.id !== String(values[AC.ID])) problem_("DATA_UNAVAILABLE", "An activity could not be loaded.");
+  return activity;
+}
+
+function listCustomers_() {
+  const customers = customerRows_().map(function(values) {
+    const c = readCustomer_(values).customer;
+    return { id: c.id, name: c.name, phone: c.phone, email: c.email, address: c.address, tags: c.tags, jobCount: 0, openTaskCount: 0, updatedAt: c.updatedAt };
+  }).sort(function(a, b) { return String(b.updatedAt).localeCompare(String(a.updatedAt)); });
+  return json_({ ok: true, customers: customers });
+}
+function openCustomer_(customerId) {
+  workspaceIdentifier_(customerId, "customer");
+  const row = customerRow_(customerId); if (!row) problem_("NOT_FOUND", "Customer not found.");
+  return json_({ ok: true, customer: row.customer });
+}
+function saveCustomer_(body) {
+  checkMutation_(body); workspaceIdentifier_(body.mutationId, "mutation");
+  const customer = customerShape_(body.customer);
+  const hash = integrationDigest_(canonicalJson_([body.expectedRevision, customer]));
+  return locked_(function() {
+    const row = customerRow_(customer.id);
+    if (row && row.mutations && Object.prototype.hasOwnProperty.call(row.mutations, body.mutationId)) {
+      if (row.mutations[body.mutationId] !== hash) problem_("MUTATION_MISMATCH", "This customer save identifier was already used for different data.");
+      return json_({ ok: true, customer: row.customer });
+    }
+    const revision = row ? Number(row.customer.revision) : 0;
+    if (revision !== body.expectedRevision) problem_("CONFLICT", "This customer changed in another window. Reload it before saving your edits.", revision);
+    const now = new Date().toISOString();
+    const stored = JSON.parse(JSON.stringify(customer));
+    stored.revision = revision + 1; stored.updatedAt = now; if (!row) stored.createdAt = now;
+    const mutations = Object.assign({}, row && row.mutations || {});
+    mutations[body.mutationId] = hash;
+    rememberRecentMutations_(mutations);
+    const data = crmData_({ customer: stored, mutations: mutations }, "The customer record");
+    const sheet = customersSheet_();
+    sheet.getRange(row ? row.row : sheet.getLastRow() + 1, 1, 1, CUSTOMER_HEADERS.length).setValues([[stored.id, stored.name, stored.phone || "", stored.email || "", stored.updatedAt, data]]);
+    SpreadsheetApp.flush();
+    return json_({ ok: true, customer: stored });
+  });
+}
+function reassignActivities_(sourceId, targetId) {
+  const sheet = customerActivitiesSheet_();
+  const rows = activityRows_();
+  if (!rows.length) return;
+  let changed = false;
+  const idColumn = []; const dataColumn = [];
+  rows.forEach(function(values) {
+    if (String(values[AC.CUSTOMER]) === sourceId) {
+      changed = true;
+      idColumn.push(targetId);
+      const activity = activityRow_(values); activity.customerId = targetId;
+      dataColumn.push(JSON.stringify(activity));
+    } else {
+      idColumn.push(values[AC.CUSTOMER]); dataColumn.push(values[AC.DATA]);
+    }
+  });
+  if (!changed) return;
+  sheet.getRange(2, AC.CUSTOMER + 1, rows.length, 1).setValues(idColumn.map(function(value) { return [value]; }));
+  sheet.getRange(2, AC.DATA + 1, rows.length, 1).setValues(dataColumn.map(function(value) { return [value]; }));
+}
+function reassignTasks_(sourceId, targetId) {
+  const sheet = tasksSheet_();
+  const rows = taskRows_();
+  if (!rows.length) return;
+  let changed = false;
+  const idColumn = []; const dataColumn = [];
+  rows.forEach(function(values) {
+    if (String(values[TC.CUSTOMER]) === sourceId) {
+      changed = true;
+      idColumn.push(targetId);
+      const envelope = readTask_(values); envelope.task.customerId = targetId;
+      dataColumn.push(JSON.stringify(envelope));
+    } else {
+      idColumn.push(values[TC.CUSTOMER]); dataColumn.push(values[TC.DATA]);
+    }
+  });
+  if (!changed) return;
+  sheet.getRange(2, TC.CUSTOMER + 1, rows.length, 1).setValues(idColumn.map(function(value) { return [value]; }));
+  sheet.getRange(2, TC.DATA + 1, rows.length, 1).setValues(dataColumn.map(function(value) { return [value]; }));
+}
+function mergeCustomers_(body) {
+  const targetId = workspaceIdentifier_(body.targetId, "target customer");
+  const sourceId = workspaceIdentifier_(body.sourceId, "source customer");
+  if (targetId === sourceId) problem_("VALIDATION", "Choose two different customers to merge.");
+  return locked_(function() {
+    const target = customerRow_(targetId); if (!target) problem_("NOT_FOUND", "Customer not found.");
+    const source = customerRow_(sourceId); if (!source) problem_("NOT_FOUND", "Source customer not found.");
+    reassignActivities_(sourceId, targetId);
+    reassignTasks_(sourceId, targetId);
+    const stored = JSON.parse(JSON.stringify(target.customer));
+    const merged = stored.mergedFromIds ? stored.mergedFromIds.slice() : [];
+    if (merged.indexOf(sourceId) < 0) merged.push(sourceId);
+    stored.mergedFromIds = merged;
+    stored.revision = stored.revision + 1;
+    stored.updatedAt = new Date().toISOString();
+    const data = crmData_({ customer: stored, mutations: target.mutations || {} }, "The merged customer record");
+    const sheet = customersSheet_();
+    sheet.getRange(target.row, 1, 1, CUSTOMER_HEADERS.length).setValues([[stored.id, stored.name, stored.phone || "", stored.email || "", stored.updatedAt, data]]);
+    sheet.deleteRow(source.row);
+    SpreadsheetApp.flush();
+    return json_({ ok: true, customer: stored });
+  });
+}
+function listActivities_(customerId) {
+  workspaceIdentifier_(customerId, "customer");
+  const activities = activityRows_().filter(function(values) { return String(values[AC.CUSTOMER]) === customerId; }).map(activityRow_).sort(function(a, b) { return String(b.at).localeCompare(String(a.at)); });
+  return json_({ ok: true, activities: activities });
+}
+function addActivity_(body) {
+  workspaceIdentifier_(body.mutationId, "mutation");
+  const activity = activityShape_(body.activity);
+  const hash = integrationDigest_(canonicalJson_(activity));
+  return locked_(function() {
+    const rows = activityRows_();
+    for (let i = 0; i < rows.length; i++) {
+      if (String(rows[i][AC.MUTATION]) === body.mutationId) {
+        const stored = activityRow_(rows[i]);
+        if (integrationDigest_(canonicalJson_(stored)) !== hash) problem_("MUTATION_MISMATCH", "This activity identifier was already used for different content.");
+        return json_({ ok: true, activity: stored });
+      }
+    }
+    const data = crmData_(activity, "The activity");
+    const sheet = customerActivitiesSheet_();
+    sheet.getRange(sheet.getLastRow() + 1, 1, 1, CUSTOMER_ACTIVITY_HEADERS.length).setValues([[activity.id, activity.customerId, activity.at, body.mutationId, data]]);
+    SpreadsheetApp.flush();
+    return json_({ ok: true, activity: activity });
+  });
+}
+function listTasks_(customerId) {
+  workspaceIdentifier_(customerId, "customer");
+  const tasks = taskRows_().filter(function(values) { return String(values[TC.CUSTOMER]) === customerId; }).map(function(values) { return readTask_(values).task; });
+  tasks.sort(function(a, b) { return String(b.createdAt).localeCompare(String(a.createdAt)); });
+  return json_({ ok: true, tasks: tasks });
+}
+function saveTask_(body) {
+  checkMutation_(body); workspaceIdentifier_(body.mutationId, "mutation");
+  const task = taskShape_(body.task);
+  const hash = integrationDigest_(canonicalJson_([body.expectedRevision, task]));
+  return locked_(function() {
+    const row = taskRow_(task.id);
+    if (row && row.mutations && Object.prototype.hasOwnProperty.call(row.mutations, body.mutationId)) {
+      if (row.mutations[body.mutationId] !== hash) problem_("MUTATION_MISMATCH", "This task save identifier was already used for different data.");
+      return json_({ ok: true, task: row.task });
+    }
+    const revision = row ? Number(row.task.revision) : 0;
+    if (revision !== body.expectedRevision) problem_("CONFLICT", "This task changed in another window. Reload it before saving your edits.", revision);
+    const now = new Date().toISOString();
+    const stored = JSON.parse(JSON.stringify(task));
+    stored.revision = revision + 1;
+    if (!row) stored.createdAt = now;
+    if (stored.status === "done" && !stored.completedAt) stored.completedAt = now;
+    if (stored.status === "open") delete stored.completedAt;
+    const mutations = Object.assign({}, row && row.mutations || {});
+    mutations[body.mutationId] = hash;
+    rememberRecentMutations_(mutations);
+    const data = crmData_({ task: stored, mutations: mutations }, "The task");
+    const sheet = tasksSheet_();
+    sheet.getRange(row ? row.row : sheet.getLastRow() + 1, 1, 1, TASK_HEADERS.length).setValues([[stored.id, stored.customerId, now, data]]);
+    SpreadsheetApp.flush();
+    return json_({ ok: true, task: stored });
+  });
+}
+
 function integrationRows_(sheet, width) {
   const count = sheet.getLastRow() - 1;
   return count > 0 ? sheet.getRange(2, 1, count, width).getValues() : [];
@@ -585,6 +886,14 @@ function workspaceShape_(input) {
     ["source", "sourceRecordId", "variant", "sourceKey", "importedAt"].forEach(function(key) { if (typeof migration[key] !== "string" || migration[key].length > 1000) problem_("VALIDATION", "Invalid migration " + key + "."); });
     boundedJson_(migration.original, 0);
     result.migration = { source: migration.source, sourceRecordId: migration.sourceRecordId, variant: migration.variant, sourceKey: migration.sourceKey, importedAt: migration.importedAt, original: JSON.parse(JSON.stringify(migration.original)) };
+  }
+  if (input.stage !== undefined) {
+    if (JOB_STAGES.indexOf(input.stage) < 0) problem_("VALIDATION", "Choose a valid job stage.");
+    result.stage = input.stage;
+  }
+  if (input.customerId !== undefined) {
+    if (typeof input.customerId !== "string" || input.customerId.length > 100) problem_("VALIDATION", "Invalid customer identifier.");
+    result.customerId = input.customerId;
   }
   if (Utilities.newBlob(JSON.stringify(result)).getBytes().length > 1000000) problem_("VALIDATION", "This job record exceeds the supported 1 MB size.");
   return result;

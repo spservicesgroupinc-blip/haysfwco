@@ -73,6 +73,9 @@ const JobsDocuments = lazy(() => import("./documents/JobsDocuments"));
 const RequestWorkspaceLink = lazy(
   () => import("./documents/RequestWorkspaceLink"),
 );
+import { startCrmSync } from "./crm";
+const CustomerList = lazy(() => import("./components/crm/CustomerList"));
+const CustomerDetail = lazy(() => import("./components/crm/CustomerDetail"));
 
 const STATUS_LABELS: Record<RequestStatus, string> = {
   submitted: "In queue",
@@ -205,6 +208,7 @@ export default function App() {
     }[]
   >([]);
   const activeSubmissions = useRef(new Set<string>());
+  const crmSyncStarted = useRef(false);
 
   const [request, setRequest] = useState<ChangeRequest | null>(null);
   const [newRequestSeed, setNewRequestSeed] = useState<
@@ -353,6 +357,13 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // One-time CRM bootstrap: local-first store + background sync.
+  useEffect(() => {
+    if (crmSyncStarted.current) return;
+    crmSyncStarted.current = true;
+    void startCrmSync();
+  }, []);
+
   useEffect(() => {
     const onPop = () => {
       if (suppressPop.current) {
@@ -389,7 +400,7 @@ export default function App() {
   // A view change is a page change: start at the top and let a screen reader
   // follow the new content instead of silently staying on the old heading.
   const viewKey =
-    view.kind === "request" || view.kind === "workspace"
+    view.kind === "request" || view.kind === "workspace" || view.kind === "customer"
       ? `${view.kind}:${view.id}`
       : view.kind;
   useEffect(() => {
@@ -682,7 +693,9 @@ export default function App() {
   const back =
     view.kind === "review"
       ? undefined
-      : { label: "Back to requests", onClick: goHome };
+      : view.kind === "customer"
+        ? { label: "Back to customers", onClick: () => goTo({ kind: "customers" }) }
+        : { label: "Back to requests", onClick: goHome };
   const subtitle =
     view.kind === "request"
       ? request
@@ -832,6 +845,35 @@ export default function App() {
               <p>Loading request…</p>
             </div>
           )}
+        </main>
+      ) : view.kind === "customers" ? (
+        <main className="shell-request" ref={mainRef} tabIndex={-1}>
+          <Suspense
+            fallback={
+              <div className="empty">
+                <div className="spinner" />
+                <p>Loading customers…</p>
+              </div>
+            }
+          >
+            <CustomerList onOpen={(id) => goTo({ kind: "customer", id })} />
+          </Suspense>
+        </main>
+      ) : view.kind === "customer" ? (
+        <main className="shell-request" ref={mainRef} tabIndex={-1}>
+          <Suspense
+            fallback={
+              <div className="empty">
+                <div className="spinner" />
+                <p>Loading customer…</p>
+              </div>
+            }
+          >
+            <CustomerDetail
+              id={view.id}
+              onBack={() => goTo({ kind: "customers" })}
+            />
+          </Suspense>
         </main>
       ) : (
         <main className="home shell-home" ref={mainRef} tabIndex={-1}>

@@ -3,6 +3,8 @@ export type RequestStatus =
   | "in_review"
   | "needs_information"
   | "completed";
+/** Lifecycle of a permanent job record (see Workspace.stage). */
+export type JobStage = "lead" | "in_progress" | "complete" | "closed";
 export type AttachmentKind = "estimate" | "quote" | "photo" | "document";
 export interface RequestedChange {
   id: string;
