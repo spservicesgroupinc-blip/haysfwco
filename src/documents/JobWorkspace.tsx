@@ -58,7 +58,7 @@ import {
 } from "./services/pdfService";
 import { getPdfFieldSchema } from "./services/pdfFieldSchema";
 import { getMissingJobFields } from "./services/jobReadiness";
-import { fillWorkspaceFromDirectory } from "./services/directoryAutofill";
+import { fillWorkspaceFromDirectory, matchingDirectoryEntry } from "./services/directoryAutofill";
 import type { ProvenanceRecord } from "./services/intakeParser";
 import type { RestorationJobData } from "./types/jobData";
 import "./workspace.css";
@@ -271,6 +271,18 @@ export default function JobWorkspace({
         updatedAt: new Date().toISOString(),
       });
   };
+  useEffect(() => {
+    const currentWorkspace = current.current;
+    if (!workspace || !currentWorkspace || row?.conflict || row?.inFlight) return;
+    const match = matchingDirectoryEntry(currentWorkspace, jobs);
+    if (!match) return;
+    let merged = fillWorkspaceFromDirectory(currentWorkspace, match);
+    const customerId = !merged.customerId && customerIdForPick(match, customers, match.customer);
+    if (customerId) merged = { ...merged, customerId };
+    if (JSON.stringify(merged) === JSON.stringify(currentWorkspace)) return;
+    change(merged);
+    setNotice("Matching customer and job details filled automatically. Your saved edits were kept.");
+  }, [workspace, jobs, customers, row?.conflict, row?.inFlight]);
   const fieldChange = (
     section: keyof RestorationJobData,
     field: string,

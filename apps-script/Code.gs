@@ -253,6 +253,8 @@ function importJobs_(body) {
     if (last > 1) sheet.getRange(2, 1, last - 1, JOB_HEADERS.length).clearContent();
     if (values.length) sheet.getRange(2, 1, values.length, JOB_HEADERS.length).setValues(values);
     syncCustomersFromDirectory_(body.jobs, now);
+    mergeDuplicateDirectoryCustomers_();
+    syncWorkspacesFromDirectory_(body.jobs);
     SpreadsheetApp.flush();
     return json_({ ok: true, jobs: body.jobs });
   });
@@ -644,6 +646,14 @@ function customerRow_(id) {
   for (let i = 0; i < rows.length; i++) if (String(rows[i][CC.ID]) === id) { const envelope = readCustomer_(rows[i]); return { row: i + 2, values: rows[i], customer: envelope.customer, mutations: envelope.mutations || {} }; }
   return null;
 }
+function mergedCustomerRow_(id) {
+  const rows = customerRows_();
+  for (let i = 0; i < rows.length; i++) {
+    const envelope = readCustomer_(rows[i]);
+    if ((envelope.customer.mergedFromIds || []).indexOf(id) >= 0) return { row: i + 2, values: rows[i], customer: envelope.customer, mutations: envelope.mutations || {} };
+  }
+  return null;
+}
 function readTask_(values) {
   let envelope;
   try { envelope = JSON.parse(String(values[TC.DATA])); } catch (error) { problem_("DATA_UNAVAILABLE", "The task could not be loaded."); }
@@ -680,11 +690,12 @@ function saveCustomer_(body) {
   const customer = customerShape_(body.customer);
   const hash = integrationDigest_(canonicalJson_([body.expectedRevision, customer]));
   return locked_(function() {
-    const row = customerRow_(customer.id);
+    const row = customerRow_(customer.id) || mergedCustomerRow_(customer.id);
     if (row && row.mutations && Object.prototype.hasOwnProperty.call(row.mutations, body.mutationId)) {
       if (row.mutations[body.mutationId] !== hash) problem_("MUTATION_MISMATCH", "This customer save identifier was already used for different data.");
       return json_({ ok: true, customer: row.customer });
     }
+    if (row && row.customer.id !== customer.id) problem_("CONFLICT", "This customer was combined with a matching customer. Reload the customer before saving.", row.customer.revision);
     const revision = row ? Number(row.customer.revision) : 0;
     if (revision !== body.expectedRevision) problem_("CONFLICT", "This customer changed in another window. Reload it before saving your edits.", revision);
     const now = new Date().toISOString();
@@ -777,7 +788,12 @@ function addActivity_(body) {
     for (let i = 0; i < rows.length; i++) {
       if (String(rows[i][AC.MUTATION]) === body.mutationId) {
         const stored = activityRow_(rows[i]);
-        if (integrationDigest_(canonicalJson_(stored)) !== hash) problem_("MUTATION_MISMATCH", "This activity identifier was already used for different content.");
+        let replay = stored;
+        if (stored.customerId !== activity.customerId) {
+          const owner = mergedCustomerRow_(activity.customerId);
+          if (owner && owner.customer.id === stored.customerId) replay = Object.assign({}, stored, { customerId: activity.customerId });
+        }
+        if (integrationDigest_(canonicalJson_(replay)) !== hash) problem_("MUTATION_MISMATCH", "This activity identifier was already used for different content.");
         return json_({ ok: true, activity: stored });
       }
     }
@@ -927,12 +943,13 @@ function requireWorkspace_(id) {
   return row;
 }
 function listWorkspaces_() {
+  ensureCustomerReferenceSynced_();
   const rows = integrationRows_(workspacesSheet_(), WORKSPACE_HEADERS.length);
   const workspaces = rows.map(function(values) { return workspaceSnapshot_({ values: values }).workspace; });
   workspaces.sort(function(a, b) { return b.updatedAt.localeCompare(a.updatedAt); });
   return json_({ ok: true, workspaces: workspaces });
 }
-function openWorkspace_(id) { return json_({ ok: true, workspace: workspaceSnapshot_(requireWorkspace_(id)).workspace }); }
+function openWorkspace_(id) { ensureCustomerReferenceSynced_(); return json_({ ok: true, workspace: workspaceSnapshot_(requireWorkspace_(id)).workspace }); }
 function workspaceFolder_(id, row) {
   if (row) return DriveApp.getFolderById(String(row.values[WC.FOLDER]));
   const root = folder_(); const matches = root.getFoldersByName("workspace-" + id);
@@ -966,6 +983,7 @@ function saveWorkspace_(body) {
       if (snapshot.payloadHash !== hash) problem_("MUTATION_MISMATCH", "This save identifier was already used for different job data.");
       if (snapshot.parentDataFileId !== (row ? String(row.values[WC.DATA]) : "")) problem_("CONFLICT", "This job changed before the pending save could finish.", revision);
     } else {
+      enrichWorkspaceFromDirectory_(workspace, storedJobRows_(), customerRows_().map(function(values) { return readCustomer_(values).customer; }));
       workspace.revision = revision + 1; workspace.updatedAt = new Date().toISOString();
       const mutations = Object.assign({}, current && current.mutations || {}); mutations[body.mutationId] = hash;
       snapshot = { workspace: workspace, mutations: mutations, payloadHash: hash, parentDataFileId: row ? String(row.values[WC.DATA]) : "" };
@@ -1254,23 +1272,151 @@ function getCustomerReference_() {
 // migrate existing uploads once and let failed imports resume on the next read.
 const CUSTOMER_REFERENCE_VERSION_KEY = "CUSTOMER_REFERENCE_VERSION";
 const CUSTOMER_DIRECTORY_SYNC_KEY = "CUSTOMER_DIRECTORY_SYNC_VERSION";
+function directorySyncReceipt_(version) { return "auto-match-v2:" + version; }
 function ensureCustomerReferenceSynced_() {
   const props = PropertiesService.getScriptProperties();
   const version = props.getProperty(CUSTOMER_REFERENCE_VERSION_KEY);
-  if (version && props.getProperty(CUSTOMER_DIRECTORY_SYNC_KEY) === version) return;
+  if (version && props.getProperty(CUSTOMER_DIRECTORY_SYNC_KEY) === directorySyncReceipt_(version)) return;
   locked_(function() {
     const current = props.getProperty(CUSTOMER_REFERENCE_VERSION_KEY);
-    if (current && props.getProperty(CUSTOMER_DIRECTORY_SYNC_KEY) === current) return;
+    if (current && props.getProperty(CUSTOMER_DIRECTORY_SYNC_KEY) === directorySyncReceipt_(current)) return;
     const reference = readCustomerReference_();
     const receipt = reference.version || "empty-directory-v1";
     const now = reference.updatedAt || new Date().toISOString();
     syncCustomerReferenceDirectory_(reference.customers, now);
     props.setProperty(CUSTOMER_REFERENCE_VERSION_KEY, receipt);
-    props.setProperty(CUSTOMER_DIRECTORY_SYNC_KEY, receipt);
+    props.setProperty(CUSTOMER_DIRECTORY_SYNC_KEY, directorySyncReceipt_(receipt));
   });
 }
 function directoryKey_(value) { return String(value || "").trim().toLowerCase().replace(/\s+/g, " "); }
 function directoryJobKey_(value) { return String(value || "").trim().toUpperCase(); }
+function directoryPhoneKey_(value) { return String(value || "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, ""); }
+function directoryAddressKey_(value) { return directoryKey_(value).replace(/[^a-z0-9]/g, ""); }
+function corroboratesDirectoryIdentity_(a, b) {
+  const pairs = [[directoryKey_(a.email), directoryKey_(b.email)], [directoryPhoneKey_(a.phone), directoryPhoneKey_(b.phone)], [directoryAddressKey_(a.address), directoryAddressKey_(b.address)]];
+  return pairs.some(function(pair) { return pair[0] && pair[0] === pair[1]; });
+}
+function safeDuplicateCustomers_(a, b) {
+  if (directoryKey_(a.name) !== directoryKey_(b.name) || !corroboratesDirectoryIdentity_(a, b)) return false;
+  const contacts = [[directoryKey_(a.email), directoryKey_(b.email)], [directoryPhoneKey_(a.phone), directoryPhoneKey_(b.phone)], [directoryAddressKey_(a.address), directoryAddressKey_(b.address)]];
+  return !contacts.some(function(pair) { return pair[0] && pair[1] && pair[0] !== pair[1]; });
+}
+function mergeDuplicateDirectoryCustomers_() {
+  const groups = Object.create(null);
+  customerRows_().forEach(function(values) {
+    const customer = readCustomer_(values).customer;
+    const key = directoryKey_(customer.name);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(customer);
+  });
+  Object.keys(groups).forEach(function(key) {
+    const group = groups[key].sort(function(a, b) {
+      return Number(/^csv-customer-/.test(a.id)) - Number(/^csv-customer-/.test(b.id)) || String(a.createdAt).localeCompare(String(b.createdAt)) || a.id.localeCompare(b.id);
+    });
+    for (let i = 0; i < group.length; i++) {
+      let target = customerRow_(group[i].id); if (!target) continue;
+      for (let j = i + 1; j < group.length; j++) {
+        const source = customerRow_(group[j].id); if (!source || !safeDuplicateCustomers_(target.customer, source.customer)) continue;
+        const overlapping = Object.keys(source.mutations).some(function(id) { return target.mutations[id] && target.mutations[id] !== source.mutations[id]; });
+        if (overlapping) continue;
+        const stored = JSON.parse(JSON.stringify(target.customer));
+        ["phone", "email", "address", "cityStateZip"].forEach(function(field) { if (!String(stored[field] || "").trim() && source.customer[field]) stored[field] = source.customer[field]; });
+        stored.tags = Array.from(new Set((stored.tags || []).concat(source.customer.tags || [])));
+        stored.mergedFromIds = Array.from(new Set((stored.mergedFromIds || []).concat(source.customer.id, source.customer.mergedFromIds || [])));
+        const mutations = Object.assign({}, source.mutations, target.mutations);
+        const changed = canonicalJson_(stored) !== canonicalJson_(target.customer) || canonicalJson_(mutations) !== canonicalJson_(target.mutations);
+        const data = crmData_({ customer: Object.assign({}, stored, { revision: stored.revision + (changed ? 1 : 0), updatedAt: changed ? new Date().toISOString() : stored.updatedAt }), mutations: mutations }, "The merged customer record");
+        const envelope = JSON.parse(data);
+        const aliases = [source.customer.id].concat(source.customer.mergedFromIds || []);
+        aliases.forEach(function(id) { reassignActivities_(id, stored.id); reassignTasks_(id, stored.id); });
+        if (changed) customersSheet_().getRange(target.row, 1, 1, CUSTOMER_HEADERS.length).setValues([[stored.id, stored.name, stored.phone || "", stored.email || "", envelope.customer.updatedAt, data]]);
+        customersSheet_().deleteRow(source.row);
+        target = customerRow_(stored.id);
+      }
+    }
+  });
+}
+function matchDirectoryJobForWorkspace_(workspace, jobs, customers) {
+  const data = workspace.record.customer;
+  const number = directoryJobKey_(data.jobNumber);
+  if (number) {
+    const exact = jobs.filter(function(job) { return directoryJobKey_(job.jobNumber) === number; });
+    return exact.length === 1 ? exact[0] : null;
+  }
+  const name = directoryKey_(data.customerName);
+  if (!name) return null;
+  const named = jobs.filter(function(job) { return job.active !== false && directoryKey_(job.customer) === name; });
+  const identity = { email: data.email, phone: data.mainPhone || data.mobilePhone || data.homePhone, address: data.lossAddress || data.mailingAddress };
+  const corroborated = named.filter(function(job) { return corroboratesDirectoryIdentity_(identity, { email: job.customerEmail, phone: job.customerPhone, address: job.address }) || (job.jobAddress && directoryAddressKey_(identity.address) === directoryAddressKey_(job.jobAddress)); });
+  if (corroborated.length === 1) return corroborated[0];
+  const owners = customers.filter(function(customer) { return directoryKey_(customer.name) === name; });
+  return named.length === 1 && owners.length === 1 ? named[0] : null;
+}
+function enrichWorkspaceFromDirectory_(workspace, jobs, customers) {
+  const aliases = Object.create(null);
+  customers.forEach(function(customer) { (customer.mergedFromIds || []).forEach(function(id) { aliases[id] = customer.id; }); });
+  if (aliases[workspace.customerId]) workspace.customerId = aliases[workspace.customerId];
+  const job = matchDirectoryJobForWorkspace_(workspace, jobs, customers);
+  if (job) {
+    const record = workspace.record;
+    const fill = function(section, field, value) {
+      const previous = record[section][field];
+      if ((previous === undefined || previous === null || typeof previous === "string" && !previous.trim()) && value !== undefined && value !== null && value !== "") record[section][field] = value;
+    };
+    fill("customer", "jobNumber", job.jobNumber); fill("customer", "customerName", job.customer);
+    fill("customer", "lossAddress", job.address); fill("customer", "mailingAddress", job.jobAddress || job.address);
+    fill("customer", "mailingCityStateZip", [job.city, job.state, job.zip].filter(Boolean).join(" "));
+    fill("customer", "mainPhone", job.customerPhone); fill("customer", "email", job.customerEmail);
+    ["projectManager", "estimator", "foreman", "supervisor"].forEach(function(field) { fill("team", field, job[field]); });
+    fill("insurance", "carrier", job.carrier); fill("insurance", "claimNumber", job.claim); fill("insurance", "dateInspected", job.dateInspected);
+    fill("checklist", "startDate", job.startDate); fill("checklist", "finishDate", job.finishDate);
+    const amount = String(job.contractAmount || "").trim();
+    if (/^\d+(?:\.\d{1,2})?$/.test(amount)) {
+      if (!String(workspace.originalContract || "").trim()) workspace.originalContract = workspaceMoney_(amount, "Original contract");
+      fill("changeOrder", "originalContractSum", Number(amount));
+    }
+    if (!workspace.customerId) {
+      const named = customers.filter(function(customer) { return directoryKey_(customer.name) === directoryKey_(job.customer); });
+      const exact = named.filter(function(customer) { return corroboratesDirectoryIdentity_(customer, { email: job.customerEmail, phone: job.customerPhone, address: job.address }); });
+      const owner = named.length === 1 ? named[0] : exact.length === 1 ? exact[0] : null;
+      if (owner) workspace.customerId = owner.id;
+    }
+  }
+  return workspace;
+}
+function syncWorkspacesFromDirectory_(jobs) {
+  const ss = spreadsheet_(); const sheet = ss.getSheetByName("Workspaces"); if (!sheet) return;
+  const customers = customerRows_().map(function(values) { return readCustomer_(values).customer; });
+  const aliases = Object.create(null);
+  customers.forEach(function(customer) { (customer.mergedFromIds || []).forEach(function(id) { aliases[id] = customer.id; }); });
+  integrationRows_(sheet, WORKSPACE_HEADERS.length).forEach(function(values, index) {
+    if (!values[WC.ID]) return;
+    const row = { row: index + 2, values: values };
+    let snapshot;
+    try { snapshot = workspaceSnapshot_(row); } catch (error) { Logger.log("Directory auto-fill skipped unavailable workspace " + String(values[WC.ID])); return; }
+    const workspace = JSON.parse(JSON.stringify(snapshot.workspace));
+    enrichWorkspaceFromDirectory_(workspace, jobs, customers);
+    if (canonicalJson_(workspace) === canonicalJson_(snapshot.workspace)) return;
+    const hash = integrationDigest_(canonicalJson_([String(values[WC.DATA]), workspace]));
+    const folder = workspaceFolder_(workspace.id, row);
+    const filename = "workspace-directory-" + hash + ".json";
+    const pending = folder.getFilesByName(filename);
+    let file;
+    if (pending.hasNext()) {
+      file = pending.next();
+      snapshot = JSON.parse(file.getBlob().getDataAsString("UTF-8"));
+      if (snapshot.payloadHash !== hash || snapshot.parentDataFileId !== String(values[WC.DATA])) problem_("DATA_UNAVAILABLE", "The automatic job update could not be recovered.");
+    } else {
+      workspace.revision = Number(values[WC.REVISION]) + 1; workspace.updatedAt = new Date().toISOString();
+      workspace.record.updatedAt = workspace.updatedAt;
+      snapshot = { workspace: workspace, mutations: snapshot.mutations || {}, payloadHash: hash, parentDataFileId: String(values[WC.DATA]) };
+      const text = JSON.stringify(snapshot);
+      if (text.length > 5000000) problem_("VALIDATION", "The job save history is too large for automatic updates.");
+      file = folder.createFile(Utilities.newBlob(text, "application/json", filename));
+    }
+    commitWorkspaceIndex_(snapshot.workspace, row, file, folder);
+  });
+}
 function syncCustomerReferenceDirectory_(references, now) {
   const jobs = storedJobRows_();
   const byNumber = Object.create(null);
@@ -1302,9 +1448,11 @@ function syncCustomerReferenceDirectory_(references, now) {
     job.updatedAt = now;
     if (index === undefined) { byNumber[key] = jobs.length; jobs.push(job); } else jobs[index] = job;
   });
-  // Directory imports never rewrite the permanent Workspaces/JobDocuments tabs.
+  // Workspaces retain their IDs/history and only gain confidently matched blanks.
   if (references.length && jobs.length) jobsSheet_().getRange(2, 1, jobs.length, JOB_HEADERS.length).setValues(jobs.map(jobValues_));
   syncCustomersFromDirectory_(jobs, now);
+  mergeDuplicateDirectoryCustomers_();
+  syncWorkspacesFromDirectory_(jobs);
   SpreadsheetApp.flush();
 }
 function syncCustomersFromDirectory_(jobs, now) {
@@ -1412,7 +1560,7 @@ function replaceCustomerReference_(payload) {
     sheet.getRange(1, 1, rows.length, 2).setValues(rows);
     props.setProperty(CUSTOMER_REFERENCE_VERSION_KEY, metadata.version);
     syncCustomerReferenceDirectory_(customers, metadata.updatedAt);
-    props.setProperty(CUSTOMER_DIRECTORY_SYNC_KEY, metadata.version);
+    props.setProperty(CUSTOMER_DIRECTORY_SYNC_KEY, directorySyncReceipt_(metadata.version));
     return { customers: customers, fileName: metadata.fileName, updatedAt: metadata.updatedAt, updatedBy: metadata.updatedBy, version: metadata.version };
   });
 }

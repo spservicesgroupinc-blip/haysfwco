@@ -4,6 +4,7 @@ import { readWorkspaceRows } from "../workspaces/localStore";
 import { refreshCustomersFromServer, stageCustomers } from "./sync";
 import { listLocalCustomers } from "./store";
 import type { Customer } from "./types";
+import { fillWorkspaceFromDirectory, matchingDirectoryEntry } from "../documents/services/directoryAutofill";
 
 /** Job reports spell the same customer inconsistently, so compare a normal form. */
 export const customerNameKey = (name: string | undefined): string =>
@@ -138,15 +139,16 @@ async function runJobCustomerSync(
   const rows = await readWorkspaceRows();
   for (const row of rows) {
     const workspace = row.workspace;
-    if (workspace.customerId || row.inFlight || row.conflict) continue;
-    const customerId =
+    if (row.inFlight || row.conflict) continue;
+    const match = matchingDirectoryEntry(workspace, entries);
+    const customerId = workspace.customerId ??
       customerIdByJobNumber.get(jobNumberKey(workspace.record.customer.jobNumber)) ??
       byName.get(customerNameKey(workspace.record.customer.customerName))?.id;
-    if (!customerId) continue;
-    const next = structuredClone(workspace);
-    next.customerId = customerId;
+    const next = match ? fillWorkspaceFromDirectory(workspace, match) : structuredClone(workspace);
+    if (customerId) next.customerId = customerId;
+    if (JSON.stringify(next) === JSON.stringify(workspace)) continue;
     await saveWorkspaceLocally(next);
-    result.linkedWorkspaceIds.push(next.id);
+    if (!workspace.customerId && next.customerId) result.linkedWorkspaceIds.push(next.id);
   }
 
   return result;

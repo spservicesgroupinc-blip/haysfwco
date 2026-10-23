@@ -155,6 +155,9 @@ test("a saved job with a matching job number is linked to its customer", async (
   assert.deepEqual(result.linkedWorkspaceIds, [workspace.id]);
   const row = await readWorkspaceRow(workspace.id);
   assert.equal(row?.workspace.customerId, customerId);
+  assert.equal(row?.workspace.record.customer.mainPhone, "260-555-0144");
+  assert.equal(row?.workspace.record.customer.customerName, "Different spelling");
+  assert.equal(row?.workspace.originalContract, "167045.81");
 });
 
 test("a saved job without a job number is linked by customer name", async () => {

@@ -3,7 +3,7 @@ import { mockBackend } from "./helpers/backend";
 import { createWorkspace } from "../src/workspaces/model";
 import type { JobEntry } from "../src/types";
 
-test("directory search explicitly fills a saved job, preserves reviewed details, and survives reload", async ({
+test("a matching saved job fills automatically, preserves reviewed details, and survives reload", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -72,17 +72,6 @@ test("directory search explicitly fills a saved job, preserves reviewed details,
   await expect(page.getByLabel("Customer name", { exact: false })).toHaveValue(
     "CSV Customer reviewed",
   );
-  await page
-    .getByText("Autofill from jobs & customers", { exact: true })
-    .click();
-  await page
-    .getByLabel("Find a job or customer", { exact: true })
-    .fill("260-555-0133");
-  await expect(
-    page.getByRole("button", { name: /CSV Customer · FW-CSV-/ }),
-  ).toHaveCount(2);
-  await expect(page.getByLabel("Main phone", { exact: true })).toHaveValue("");
-  await page.getByRole("button", { name: /CSV Customer · FW-CSV-100/ }).click();
   await expect(page.getByLabel("Main phone", { exact: true })).toHaveValue(
     "260-555-0133",
   );
@@ -95,9 +84,6 @@ test("directory search explicitly fills a saved job, preserves reviewed details,
   await expect(page.getByLabel("Loss address", { exact: false })).toHaveValue(
     entry.address,
   );
-  await expect(
-    page.getByRole("status").filter({ hasText: "Available directory details" }),
-  ).toBeVisible();
   await page.getByRole("button", { name: "Sync now", exact: true }).click();
   await expect(page.locator(".workspace-sync")).toContainText(
     "Saved to shared workspace",

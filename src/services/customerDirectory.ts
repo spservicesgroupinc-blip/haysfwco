@@ -21,6 +21,17 @@ export const customerIdOfOption = (
 export const customerNameKey = (value: string | undefined): string =>
   (value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 
+/** A full job number or unique full customer/contact value can fill directly. */
+export function automaticJobMatch(text: string, jobs: JobEntry[]): JobEntry | undefined {
+  const query = customerNameKey(text);
+  if (!query) return undefined;
+  const numbered = jobs.filter(job => customerNameKey(job.jobNumber) === query);
+  if (numbered.length) return numbered.length === 1 ? numbered[0] : undefined;
+  const matches = jobs.filter(job => [job.customer, job.customerEmail, job.customerPhone]
+    .some(value => customerNameKey(value) === query));
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 /**
  * Turns the loaded customer directory into pickable rows.
  *
