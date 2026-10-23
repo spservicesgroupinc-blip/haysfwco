@@ -914,6 +914,8 @@ export default function App() {
             <CustomerDetail
               id={view.id}
               onBack={() => goTo({ kind: "customers" })}
+              onOpenWorkspace={(id) => goTo({ kind: "workspace", id })}
+              onOpenRequest={(id) => void openRequestById(id)}
             />
           </Suspense>
         </main>

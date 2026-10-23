@@ -9,7 +9,27 @@ import {
   customerNameKey,
 } from "../../services/customerDirectory";
 
-/** Explicit picks fill missing details; imports never rewrite a saved job. */
+/** Exact job numbers win; contact/name matches must identify only one record. */
+export function matchingDirectoryEntry(workspace: Workspace, entries: JobEntry[]): JobEntry | undefined {
+  const number = normalizeJobNumber(workspace.record.customer.jobNumber);
+  const customer = workspace.record.customer;
+  const name = customerNameKey(customer.customerName);
+  const candidates = entries.filter(entry => {
+    if (number && entry.jobNumber.trim()) return normalizeJobNumber(entry.jobNumber) === number;
+    return !!name && customerNameKey(entry.customer) === name;
+  });
+  const exactJobs = number ? candidates.filter(entry => normalizeJobNumber(entry.jobNumber) === number) : [];
+  if (exactJobs.length) return exactJobs.length === 1 ? exactJobs[0] : undefined;
+  if (candidates.length === 1) return candidates[0];
+  const phone = (value: string | undefined) => (value || "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+  const corroborated = candidates.filter(entry =>
+    (customer.lossAddress.trim() && customerNameKey(customer.lossAddress) === customerNameKey(entry.address)) ||
+    (customer.email.trim() && customerNameKey(customer.email) === customerNameKey(entry.customerEmail)) ||
+    (phone(customer.mainPhone) && phone(customer.mainPhone) === phone(entry.customerPhone)));
+  return corroborated.length === 1 ? corroborated[0] : undefined;
+}
+
+/** Matched directory data fills blanks; saved corrections remain authoritative. */
 export function fillWorkspaceFromDirectory(
   workspace: Workspace,
   entry: JobEntry,
@@ -76,6 +96,7 @@ export function fillWorkspaceFromDirectory(
   if (!next.originalContract.trim() && source.originalContract.trim())
     next.originalContract = source.originalContract;
   if (!next.customerId) next.customerId = customerIdOfOption(entry.id);
+  if (JSON.stringify(next) === JSON.stringify(workspace)) return workspace;
   next.updatedAt = new Date().toISOString();
   return next;
 }

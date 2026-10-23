@@ -28,6 +28,7 @@ import {
   customerIdForPick,
   customerIdOfOption,
   customerOptions,
+  automaticJobMatch,
 } from "../services/customerDirectory";
 import {
   priorChangesForJob,
@@ -415,6 +416,12 @@ export default function SimpleRequest(
     setMatchListOpen(false);
     setCustomerError("");
   };
+
+  useEffect(() => {
+    if (selectedJob) return;
+    const match = automaticJobMatch(customerText, directoryJobs);
+    if (match) chooseJob(match);
+  }, [customerText, directoryJobs, selectedJob]);
 
   // The loaded customer directory arrives after the first paint and may change
   // when a job upload adds customers, so the picker follows it live.

@@ -86,6 +86,19 @@ test("a created customer is enriched with local job and open-task counts", async
   assert.equal(summary.openTaskCount, 1);
 });
 
+test("matching customers automatically reuse the record and combine missing details", async () => {
+  await resetDatabases();
+  const first = await createCustomer({ name: "Auto Match", phone: "260-555-0100", tags: ["existing"] });
+  const merged = await createCustomer({ name: " auto   match ", phone: "(260) 555-0100", email: "auto@example.test", tags: ["imported"] });
+  assert.equal(merged.id, first.id);
+  assert.equal(merged.phone, "260-555-0100");
+  assert.equal(merged.email, "auto@example.test");
+  assert.deepEqual(merged.tags, ["existing", "imported"]);
+  assert.equal((await listCustomers()).length, 1);
+  const different = await createCustomer({ name: "Auto Match", phone: "260-555-0999" });
+  assert.notEqual(different.id, first.id);
+});
+
 test("notes append to the timeline newest first", async () => {
   await resetDatabases();
   const customer = await createCustomer({ name: "Timeline Co" });

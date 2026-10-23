@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import type { ChangeRequest, JobEntry, RequestSummary } from "../types";
 import type { CustomerSummary } from "../crm/types";
+import CustomerDetail from "../components/crm/CustomerDetail";
 import { customerIdForPick } from "../services/customerDirectory";
 import type { Workspace, WorkspaceRow, DocumentRow } from "../workspaces/types";
 import {
@@ -58,7 +59,7 @@ import {
 } from "./services/pdfService";
 import { getPdfFieldSchema } from "./services/pdfFieldSchema";
 import { getMissingJobFields } from "./services/jobReadiness";
-import { fillWorkspaceFromDirectory } from "./services/directoryAutofill";
+import { fillWorkspaceFromDirectory, matchingDirectoryEntry } from "./services/directoryAutofill";
 import type { ProvenanceRecord } from "./services/intakeParser";
 import type { RestorationJobData } from "./types/jobData";
 import "./workspace.css";
@@ -66,7 +67,7 @@ import "./documents.css";
 
 const textOf = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
-type Tab = "details" | "documents" | "requests" | "intake";
+type Tab = "overview" | "details" | "documents" | "requests" | "intake";
 function Section({
   title,
   children,
@@ -124,7 +125,7 @@ export default function JobWorkspace({
   const current = useRef<Workspace | null>(null);
   const [row, setRow] = useState<WorkspaceRow>();
   const [documents, setDocuments] = useState<DocumentRow[]>([]);
-  const [tab, setTab] = useState<Tab>("details");
+  const [tab, setTab] = useState<Tab>("overview");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState("");
@@ -193,6 +194,7 @@ export default function JobWorkspace({
             !local.inFlight &&
             !local.conflict))
       ) {
+        if (!current.current) setTab(local.workspace.record.customer.customerName.trim() || local.workspace.customerId ? "overview" : "details");
         current.current = local.workspace;
         setWorkspace(local.workspace);
       } else if (local && current.current) {
@@ -271,6 +273,18 @@ export default function JobWorkspace({
         updatedAt: new Date().toISOString(),
       });
   };
+  useEffect(() => {
+    const currentWorkspace = current.current;
+    if (!workspace || !currentWorkspace || row?.conflict || row?.inFlight) return;
+    const match = matchingDirectoryEntry(currentWorkspace, jobs);
+    if (!match) return;
+    let merged = fillWorkspaceFromDirectory(currentWorkspace, match);
+    const customerId = !merged.customerId && customerIdForPick(match, customers, match.customer);
+    if (customerId) merged = { ...merged, customerId };
+    if (JSON.stringify(merged) === JSON.stringify(currentWorkspace)) return;
+    change(merged);
+    setNotice("Matching customer and job details filled automatically. Your saved edits were kept.");
+  }, [workspace, jobs, customers, row?.conflict, row?.inFlight]);
   const fieldChange = (
     section: keyof RestorationJobData,
     field: string,
@@ -442,6 +456,7 @@ export default function JobWorkspace({
       </div>
     );
   const data = workspace.record;
+  const overviewCustomerId = workspace.customerId || customerIdForPick(undefined, customers, data.customer.customerName);
   const related = requests.filter((request) => request.workspaceId === id);
   const missing = getMissingJobFields(data);
   const pending = row?.dirty || row?.inFlight;
@@ -462,9 +477,9 @@ export default function JobWorkspace({
       <div className="workspace-title">
         <div>
           <button className="workspace-back" onClick={onBack}>
-            ← Jobs & Documents
+            ← Customers & Jobs
           </button>
-          <h1>{data.customer.customerName || "New job"}</h1>
+          <h1>{data.customer.customerName || "New customer & job"}</h1>
           <p>
             {[data.customer.jobNumber, data.customer.lossAddress]
               .filter(Boolean)
@@ -564,6 +579,7 @@ export default function JobWorkspace({
       <nav className="workspace-tabs" aria-label="Job sections">
         {(
           [
+            ["overview", "Overview"],
             ["details", "Job Details"],
             ["documents", "Documents"],
             ["requests", "Change Requests"],
@@ -581,6 +597,21 @@ export default function JobWorkspace({
           </button>
         ))}
       </nav>
+      {tab === "overview" && (overviewCustomerId ? <CustomerDetail
+        key={overviewCustomerId}
+        id={overviewCustomerId}
+        embedded
+        workspaceId={workspace.id}
+        contactOverride={data.customer}
+        onBack={onBack}
+        onOpenRequest={onOpenRequest}
+        onEditContact={() => { setTab("details"); setFocusField("customer-customerName"); }}
+      /> : <section className="workspace-panel" aria-label="Record overview">
+        <h2>Contact details</h2>
+        <p>{data.customer.mainPhone || data.customer.mobilePhone || data.customer.homePhone || "Add a phone number to keep in touch."}</p>
+        {data.customer.email && <p><a href={`mailto:${data.customer.email}`}>{data.customer.email}</a></p>}
+        <button className="button" onClick={() => setTab("details")}>Edit job details</button>
+      </section>)}
       {tab === "details" && (
         <div className="workspace-form">
           <Section title="Customer & Property" open>

@@ -136,6 +136,26 @@ export async function openCustomer(customerId: string): Promise<Customer | null>
 }
 
 export async function createCustomer(input: NewCustomerInput): Promise<Customer> {
+  await refreshCustomersFromServer().catch(() => undefined);
+  const nameKey = customerNameKey(input.name);
+  const phoneKey = (value: string | undefined) => (value || "").replace(/\D/g, "").replace(/^1(?=\d{10}$)/, "");
+  const matches = (await listLocalCustomers()).filter(customer =>
+    customerNameKey(customer.name) === nameKey &&
+    !(customer.phone && input.phone && phoneKey(customer.phone) !== phoneKey(input.phone)) &&
+    !(customer.email && input.email && customerNameKey(customer.email) !== customerNameKey(input.email)) &&
+    !(customer.address && input.address && customerNameKey(customer.address) !== customerNameKey(input.address)));
+  if (matches.length === 1) {
+    const existing = matches[0];
+    const merged = {
+      ...existing,
+      phone: existing.phone || input.phone,
+      email: existing.email || input.email,
+      address: existing.address || input.address,
+      cityStateZip: existing.cityStateZip || input.cityStateZip,
+      tags: [...new Set([...(existing.tags || []), ...(input.tags || [])])],
+    };
+    return JSON.stringify(merged) === JSON.stringify(existing) ? existing : updateCustomer(merged);
+  }
   const now = new Date().toISOString();
   const customer: Customer = {
     id: crypto.randomUUID(),

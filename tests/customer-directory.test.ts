@@ -5,7 +5,16 @@ import {
   customerIdOfOption,
   customerOptionId,
   customerOptions,
+  automaticJobMatch,
 } from "../src/services/customerDirectory";
+
+test("full matching values select automatically while ambiguous customer names do not", () => {
+  const first = job();
+  assert.equal(automaticJobMatch(" f-26-0366-p ", [first]), first);
+  assert.equal(automaticJobMatch("York Ridge Apartments", [first]), first);
+  assert.equal(automaticJobMatch("York Ridge", [first]), undefined);
+  assert.equal(automaticJobMatch("York Ridge Apartments", [first, job({ id: "job-2", jobNumber: "OTHER" })]), undefined);
+});
 import type { CustomerSummary } from "../src/crm/types";
 import type { JobEntry } from "../src/types";
 

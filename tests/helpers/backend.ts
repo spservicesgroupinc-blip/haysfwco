@@ -12,7 +12,7 @@ export function mockBackend() {
   let upstream: (url: string, options: any) => any = () => { throw new Error("Network unavailable"); };
   let counter = 0,
     locked = false,
-    failNextWrite = false;
+    failNextWrite: boolean | string = false;
   const iterator = (values: any[]) => {
     let i = 0;
     return { hasNext: () => i < values.length, next: () => values[i++] };
@@ -119,7 +119,7 @@ export function mockBackend() {
           rows.splice(row - 1, height);
         },
         setValues: (values: any[][]) => {
-          if (failNextWrite) {
+          if (failNextWrite === true || failNextWrite === name) {
             failNextWrite = false;
             throw new Error("Index write unavailable");
           }
@@ -228,8 +228,8 @@ export function mockBackend() {
         sandbox.doPost({ postData: { contents: JSON.stringify(body) } }).text,
       ),
     get: (parameter: any) => JSON.parse(sandbox.doGet({ parameter }).text),
-    failWrite: () => {
-      failNextWrite = true;
+    failWrite: (sheetName?: string) => {
+      failNextWrite = sheetName ?? true;
     },
     busy: (value: boolean) => {
       locked = value;

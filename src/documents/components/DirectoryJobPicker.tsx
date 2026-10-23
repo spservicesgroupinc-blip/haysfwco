@@ -58,7 +58,7 @@ export function DirectoryJobPicker({
         />
       </div>
       <p id={`${id}-help`} className="workspace-help">
-        Choose the matching entry to autofill. Your existing details stay saved.
+      Exact matches fill automatically. You can choose another entry here; your saved edits are kept.
       </p>
       {query.trim() && (
         <div aria-label="Matching jobs and customers">

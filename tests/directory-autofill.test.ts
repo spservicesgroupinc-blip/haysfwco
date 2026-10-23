@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWorkspace } from "../src/workspaces/model";
-import { fillWorkspaceFromDirectory } from "../src/documents/services/directoryAutofill";
+import { fillWorkspaceFromDirectory, matchingDirectoryEntry } from "../src/documents/services/directoryAutofill";
 import type { JobEntry } from "../src/types";
 
 const entry: JobEntry = {
@@ -18,6 +18,29 @@ const entry: JobEntry = {
   active: true,
   updatedAt: "2026-10-22T12:00:00Z",
 };
+
+test("matching detects a job number automatically even with a corrected customer name", () => {
+  const workspace = createWorkspace();
+  workspace.record.customer.jobNumber = " fw-100 ";
+  workspace.record.customer.customerName = "Reviewed customer name";
+  assert.equal(matchingDirectoryEntry(workspace, [entry]), entry);
+  const merged = fillWorkspaceFromDirectory(workspace, entry);
+  assert.equal(merged.record.customer.mainPhone, entry.customerPhone);
+  assert.equal(merged.record.customer.customerName, "Reviewed customer name");
+  assert.equal(fillWorkspaceFromDirectory(merged, entry), merged);
+});
+
+test("a unique name matches automatically but multiple customer jobs stay separate", () => {
+  const workspace = createWorkspace();
+  workspace.record.customer.customerName = "  Alex   Customer ";
+  assert.equal(matchingDirectoryEntry(workspace, [entry]), entry);
+  const other = { ...entry, id: "other", jobNumber: "FW-200", address: "200 Other St" };
+  assert.equal(matchingDirectoryEntry(workspace, [entry, other]), undefined);
+  workspace.record.customer.lossAddress = other.address;
+  assert.equal(matchingDirectoryEntry(workspace, [entry, other]), other);
+  workspace.record.customer.jobNumber = "FW-300";
+  assert.equal(matchingDirectoryEntry(workspace, [entry, other]), undefined);
+});
 
 test("an explicit directory pick fills blank saved job fields and preserves manual edits", () => {
   const workspace = createWorkspace();
