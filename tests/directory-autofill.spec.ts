@@ -69,6 +69,7 @@ test("a matching saved job fills automatically, preserves reviewed details, and 
     });
   });
   await page.goto(`/#/workspaces/${workspace.id}`);
+  await page.getByRole("button", { name: "Job Details", exact: true }).click();
   await expect(page.getByLabel("Customer name", { exact: false })).toHaveValue(
     "CSV Customer reviewed",
   );
@@ -89,6 +90,7 @@ test("a matching saved job fills automatically, preserves reviewed details, and 
     "Saved to shared workspace",
   );
   await page.reload();
+  await page.getByRole("button", { name: "Job Details", exact: true }).click();
   await expect(page.getByLabel("Main phone", { exact: true })).toHaveValue(
     entry.customerPhone,
   );

@@ -984,6 +984,7 @@ function saveWorkspace_(body) {
       if (snapshot.parentDataFileId !== (row ? String(row.values[WC.DATA]) : "")) problem_("CONFLICT", "This job changed before the pending save could finish.", revision);
     } else {
       enrichWorkspaceFromDirectory_(workspace, storedJobRows_(), customerRows_().map(function(values) { return readCustomer_(values).customer; }));
+      linkWorkspaceCustomer_(workspace, current && current.workspace);
       workspace.revision = revision + 1; workspace.updatedAt = new Date().toISOString();
       const mutations = Object.assign({}, current && current.mutations || {}); mutations[body.mutationId] = hash;
       snapshot = { workspace: workspace, mutations: mutations, payloadHash: hash, parentDataFileId: row ? String(row.values[WC.DATA]) : "" };
@@ -1272,7 +1273,7 @@ function getCustomerReference_() {
 // migrate existing uploads once and let failed imports resume on the next read.
 const CUSTOMER_REFERENCE_VERSION_KEY = "CUSTOMER_REFERENCE_VERSION";
 const CUSTOMER_DIRECTORY_SYNC_KEY = "CUSTOMER_DIRECTORY_SYNC_VERSION";
-function directorySyncReceipt_(version) { return "auto-match-v2:" + version; }
+function directorySyncReceipt_(version) { return "unified-job-customer-v3:" + version; }
 function ensureCustomerReferenceSynced_() {
   const props = PropertiesService.getScriptProperties();
   const version = props.getProperty(CUSTOMER_REFERENCE_VERSION_KEY);
@@ -1384,6 +1385,39 @@ function enrichWorkspaceFromDirectory_(workspace, jobs, customers) {
   }
   return workspace;
 }
+// A saved job and its customer share one persistent CRM identity even when no
+// CSV has been imported. This runs inside the caller's existing script lock.
+function linkWorkspaceCustomer_(workspace, previous) {
+  const data = workspace.record.customer;
+  const name = String(data.customerName || data.jobName || "").trim();
+  const identity = { name: name, phone: String(data.mainPhone || data.mobilePhone || data.homePhone || "").trim(), email: String(data.email || "").trim(), address: String(data.lossAddress || data.mailingAddress || "").trim(), cityStateZip: String(data.mailingCityStateZip || "").trim() };
+  const requestedId = workspace.customerId || previous && previous.customerId;
+  let target = requestedId ? customerRow_(requestedId) || mergedCustomerRow_(requestedId) : null;
+  if (!target && !name) return;
+  if (!target) {
+    const candidates = customerRows_().map(function(values, index) { const envelope = readCustomer_(values); return { row: index + 2, customer: envelope.customer, mutations: envelope.mutations || {} }; });
+    const named = candidates.filter(function(candidate) { return directoryKey_(candidate.customer.name) === directoryKey_(name); });
+    const corroborated = named.filter(function(candidate) { return corroboratesDirectoryIdentity_(candidate.customer, identity); });
+    target = named.length === 1 ? named[0] : corroborated.length === 1 ? corroborated[0] : null;
+    if (!target) {
+      // An explicitly chosen customer ID is retained if its device-created CRM
+      // row has not reached the server yet. Ambiguous same-name people receive
+      // a job-scoped ID rather than borrowing an unrelated person's history.
+      const id = requestedId || (named.length ? "workspace-customer-" + integrationDigest_(workspace.id).slice(0, 32) : "csv-customer-" + integrationDigest_(directoryKey_(name)).slice(0, 32));
+      target = { row: 0, customer: { id: id, name: name, revision: 0, createdAt: new Date().toISOString(), updatedAt: "" }, mutations: {} };
+    }
+  }
+  const customer = JSON.parse(JSON.stringify(target.customer));
+  ["name", "phone", "email", "address", "cityStateZip"].forEach(function(field) { if (!String(customer[field] || "").trim() && identity[field]) customer[field] = identity[field]; });
+  const workspaceFields = { customerName: customer.name, mainPhone: customer.phone, email: customer.email, lossAddress: customer.address, mailingAddress: customer.address, mailingCityStateZip: customer.cityStateZip };
+  Object.keys(workspaceFields).forEach(function(field) { if (!String(data[field] || "").trim() && workspaceFields[field]) data[field] = workspaceFields[field]; });
+  workspace.customerId = customer.id;
+  if (target.row && canonicalJson_(customer) === canonicalJson_(target.customer)) return;
+  customer.revision = Number(customer.revision || 0) + 1; customer.updatedAt = new Date().toISOString();
+  const envelope = crmData_({ customer: customer, mutations: target.mutations }, "The job customer record");
+  const sheet = customersSheet_();
+  sheet.getRange(target.row || sheet.getLastRow() + 1, 1, 1, CUSTOMER_HEADERS.length).setValues([[customer.id, customer.name, customer.phone || "", customer.email || "", customer.updatedAt, envelope]]);
+}
 function syncWorkspacesFromDirectory_(jobs) {
   const ss = spreadsheet_(); const sheet = ss.getSheetByName("Workspaces"); if (!sheet) return;
   const customers = customerRows_().map(function(values) { return readCustomer_(values).customer; });
@@ -1396,6 +1430,7 @@ function syncWorkspacesFromDirectory_(jobs) {
     try { snapshot = workspaceSnapshot_(row); } catch (error) { Logger.log("Directory auto-fill skipped unavailable workspace " + String(values[WC.ID])); return; }
     const workspace = JSON.parse(JSON.stringify(snapshot.workspace));
     enrichWorkspaceFromDirectory_(workspace, jobs, customers);
+    linkWorkspaceCustomer_(workspace, snapshot.workspace);
     if (canonicalJson_(workspace) === canonicalJson_(snapshot.workspace)) return;
     const hash = integrationDigest_(canonicalJson_([String(values[WC.DATA]), workspace]));
     const folder = workspaceFolder_(workspace.id, row);

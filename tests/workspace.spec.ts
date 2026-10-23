@@ -46,6 +46,7 @@ async function sandbox(page: Page, workspaces: Workspace[] = []) {
 
 async function openJob(page: Page, workspace: Workspace) {
   await page.goto(`/#/workspaces/${workspace.id}`);
+  await page.getByRole('button', { name: 'Job Details', exact: true }).click();
   await expect(page.getByLabel('Customer name', { exact: false })).toHaveValue(workspace.record.customer.customerName);
 }
 

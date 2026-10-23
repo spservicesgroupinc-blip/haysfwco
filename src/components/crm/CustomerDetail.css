@@ -1,5 +1,7 @@
 /* Customer pages: quiet surfaces, clear hierarchy, and practical actions. */
 .crm-detail { max-width: 1240px; --customer-line: #e4e8ed; --customer-muted: #667487; }
+.crm-detail.crm-detail-embedded { max-width: none; margin: 0; }
+.crm-detail-embedded .customer-overview-layout { gap: 20px; }
 .customer-breadcrumb { display: flex; align-items: center; gap: 12px; margin: -4px 0 16px; color: var(--customer-muted); font-size: 12px; }
 .customer-breadcrumb button { display: inline-flex; gap: 8px; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: #435269; font-weight: 600; }
 .crm-detail .crm-profile { position: relative; align-items: center; gap: 20px; padding: 28px; margin-bottom: 0; border-color: var(--customer-line); border-top: 3px solid #b91c1c; border-radius: 12px 12px 0 0; box-shadow: 0 2px 4px #17202e03; }

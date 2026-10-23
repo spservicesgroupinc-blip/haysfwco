@@ -47,6 +47,7 @@ import { cachedRequests, cachedJobDirectory } from "../../services/storage";
 import { customerNameKey } from "../../services/customerDirectory";
 import type { ChangeRequest, JobEntry, RequestStatus } from "../../types";
 import type { WorkspaceRow } from "../../workspaces/types";
+import type { CustomerData } from "../../documents/types/jobData";
 import ActivityTimeline from "./ActivityTimeline";
 import CustomerForm from "./CustomerForm";
 import TaskList from "./TaskList";
@@ -72,9 +73,13 @@ export interface CustomerDetailProps {
   onBack: () => void;
   onOpenWorkspace?: (id: string) => void;
   onOpenRequest?: (id: string) => void;
+  embedded?: boolean;
+  workspaceId?: string;
+  onEditContact?: () => void;
+  contactOverride?: CustomerData;
 }
 
-export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequest }: CustomerDetailProps) {
+export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequest, embedded = false, workspaceId, onEditContact, contactOverride }: CustomerDetailProps) {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [activities, setActivities] = useState<Activity[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -91,7 +96,7 @@ export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequ
     try {
       const next = await openCustomer(id);
       setCustomer(next);
-      setError("");
+      setError(next ? "" : "This record's contact details are not available yet. Try again after syncing.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -246,9 +251,9 @@ export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequ
               >
                 Try again
               </button>
-              <button className="button" onClick={onBack}>
+              {!embedded && <button className="button" onClick={onBack}>
                 Back to customers
-              </button>
+              </button>}
             </div>
           </>
         ) : (
@@ -269,7 +274,7 @@ export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequ
   const linkedRequests = requests
     .filter(
       (request) =>
-        request.customerId === id ||
+        workspaceId ? request.workspaceId === workspaceId : request.customerId === id ||
         (!request.customerId &&
           customerKey &&
           customerNameKey(request.job?.customer) === customerKey),
@@ -282,9 +287,16 @@ export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequ
   const activeJobs = linked.filter(row => !["complete", "closed"].includes(row.workspace.stage || "lead")).length + importedJobs.filter(job => job.active).length;
   const initials = customer.name.trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase();
   const updatedDate = new Date(customer.updatedAt);
+  const contact = {
+    phone: contactOverride?.mainPhone || contactOverride?.mobilePhone || contactOverride?.homePhone || customer.phone,
+    email: contactOverride?.email || customer.email,
+    address: contactOverride?.lossAddress || contactOverride?.mailingAddress || customer.address,
+    cityStateZip: contactOverride?.lossAddress ? "" : contactOverride?.mailingAddress ? contactOverride.mailingCityStateZip : customer.cityStateZip,
+  };
 
   return (
-    <div className="crm crm-detail">
+    <div className={`crm crm-detail${embedded ? " crm-detail-embedded" : ""}`}>
+      {!embedded && <>
       <div className="customer-breadcrumb">
         <button type="button" onClick={onBack}><ArrowLeft size={15} />All customers</button>
         <span aria-hidden="true">/</span><span>Customer overview</span>
@@ -340,6 +352,7 @@ export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequ
         <div><FileText size={18} /><span><strong>{linkedRequests.length}</strong><small>Change orders</small></span></div>
         <div className="customer-last-updated"><CheckCircle2 size={17} /><span><strong>Customer record</strong><small>{Number.isNaN(updatedDate.getTime()) ? "Details available below" : `Updated ${updatedDate.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`}</small></span></div>
       </div>
+      </>}
 
       {error ? (
         <div className="notice danger" role="alert">
@@ -349,7 +362,7 @@ export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequ
 
       <div className="customer-overview-layout">
       <div className="customer-overview-main">
-      <section className="crm-section customer-jobs" aria-label="Jobs">
+      {!embedded && <section className="crm-section customer-jobs" aria-label="Jobs">
         <div className="crm-section-head">
           <h2>
             <Briefcase size={17} />
@@ -427,7 +440,7 @@ export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequ
           </button>
         </div>
         </details>
-      </section>
+      </section>}
 
       <section className="crm-section" aria-label="Change orders">
         <div className="crm-section-head">
@@ -467,8 +480,8 @@ export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequ
           </ul>
         ) : (
           <p className="crm-empty">
-            No change orders linked to this customer yet. Pick this customer on
-            the New request page and the change order appears here.
+            {workspaceId ? "No change orders for this record yet. Use New change request to get started."
+              : "No change orders linked to this customer yet. Pick this customer on the New request page and the change order appears here."}
           </p>
         )}
       </section>
@@ -483,11 +496,11 @@ export default function CustomerDetail({ id, onBack, onOpenWorkspace, onOpenRequ
         <section className="crm-section customer-contact" aria-label="Contact details">
           <div className="crm-section-head"><h2>Contact details</h2><UserRound size={17} aria-hidden="true" /></div>
           <dl>
-            <div><dt><Phone size={14} />Phone</dt><dd>{customer.phone ? <a href={`tel:${customer.phone.replace(/[^+\d]/g, "")}`}>{customer.phone}<ArrowUpRight size={13} /></a> : <span className="customer-missing">No phone added</span>}</dd></div>
-            <div><dt><Mail size={14} />Email</dt><dd>{customer.email ? <a href={`mailto:${customer.email}`}>{customer.email}<ArrowUpRight size={13} /></a> : <span className="customer-missing">No email added</span>}</dd></div>
-            <div><dt><MapPin size={14} />Address</dt><dd>{[customer.address, customer.cityStateZip].filter(Boolean).join(", ") || <span className="customer-missing">No address added</span>}</dd></div>
+            <div><dt><Phone size={14} />Phone</dt><dd>{contact.phone ? <a href={`tel:${contact.phone.replace(/[^+\d]/g, "")}`}>{contact.phone}<ArrowUpRight size={13} /></a> : <span className="customer-missing">No phone added</span>}</dd></div>
+            <div><dt><Mail size={14} />Email</dt><dd>{contact.email ? <a href={`mailto:${contact.email}`}>{contact.email}<ArrowUpRight size={13} /></a> : <span className="customer-missing">No email added</span>}</dd></div>
+            <div><dt><MapPin size={14} />Address</dt><dd>{[contact.address, contact.cityStateZip].filter(Boolean).join(", ") || <span className="customer-missing">No address added</span>}</dd></div>
           </dl>
-          <button className="text-button" type="button" onClick={() => { setMergeFocus(false); setFormOpen(true); }}>Update contact details<ArrowUpRight size={14} /></button>
+          <button className="text-button" type="button" onClick={() => { if (onEditContact) { onEditContact(); return; } setMergeFocus(false); setFormOpen(true); }}>Update contact details<ArrowUpRight size={14} /></button>
         </section>
       <TaskList
         tasks={tasks}

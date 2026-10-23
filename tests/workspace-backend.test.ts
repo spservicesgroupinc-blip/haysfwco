@@ -75,7 +75,7 @@ test("old workspace retries identify their committed mutation while returning th
 test("an index failure is recovered using the immutable workspace snapshot", () => {
   const backend = mockBackend();
   backend.post({ action: "listWorkspaces" });
-  backend.failWrite();
+  backend.failWrite("Workspaces");
   assert.equal(save(backend).ok, false);
   const count = backend.files.size;
   const retried = save(backend);
@@ -88,7 +88,7 @@ test("an index failure is recovered using the immutable workspace snapshot", () 
 test("orphan workspace mutation cannot overwrite a competing successful save", () => {
   const backend = mockBackend();
   backend.post({ action: "listWorkspaces" });
-  backend.failWrite();
+  backend.failWrite("Workspaces");
   assert.equal(save(backend).ok, false);
   const competing = workspace();
   competing.record.customer.customerName = "Competing";
